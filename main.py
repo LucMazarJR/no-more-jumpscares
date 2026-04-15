@@ -11,7 +11,21 @@ def modo_teste():
 
 def modo_treino():
     from src.agent.train import treinar
-    treinar(timesteps=500_000)
+    import os, glob
+
+    # Procura o modelo mais recente automaticamente
+    modelos = glob.glob("modelos/fnaf_ppo_*.zip")
+    ultimo_modelo = max(modelos, key=os.path.getctime) if modelos else None
+
+    if ultimo_modelo:
+        print(f"Continuando treino: {ultimo_modelo}")
+    else:
+        print("Nenhum modelo encontrado — começando do zero")
+
+    treinar(
+        timesteps=500_000,
+        carregar_modelo=ultimo_modelo
+    )
 
 if __name__ == "__main__":
     modo = sys.argv[1] if len(sys.argv) > 1 else "teste"

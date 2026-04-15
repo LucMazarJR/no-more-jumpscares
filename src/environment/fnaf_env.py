@@ -87,9 +87,10 @@ class FNAFEnv(gym.Env):
         self.capture.focar_janela("Five Nights at Freddy's")
         time.sleep(0.5)
 
-        self.capture.clicar(617, 678)
+        self.capture.clicar(676, 619)
         time.sleep(15)
-        self.capture.clicar(617, 678)
+        self.capture.clicar(676, 619)
+        time.sleep(20)
 
         print("Reset completo — noite iniciada!")
         observacao = self._capturar_observacao()
@@ -98,7 +99,7 @@ class FNAFEnv(gym.Env):
     def step(self, acao: int):
         self.passos += 1
         self._executar_acao(acao)
-        time.sleep(0.5)
+        time.sleep(0.25)
 
         observacao = self._capturar_observacao()
         morreu     = self._detectar_morte()
