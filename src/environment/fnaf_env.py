@@ -30,22 +30,22 @@ ACOES = {
 }
 
 COORDS = {
-    "porta_esquerda":      (375,  537),
-    "porta_direita":       (1545, 537),
-    "luz_esquerda":        (371,  643),
-    "luz_direita":         (1530, 647),
-    "abrir_fechar_camera": (887,  854),
-    "camera_1a":           (1303, 545),
-    "camera_1b":           (1284, 605),
-    "camera_1c":           (1238, 679),
-    "camera_2a":           (1303, 732),
-    "camera_2b":           (1303, 789),
-    "camera_3":            (1305, 834),
-    "camera_4a":           (1207, 775),
-    "camera_4b":           (1396, 792),
-    "camera_5":            (1415, 842),
-    "camera_6":            (1168, 625),
-    "camera_7":            (1493, 758),
+    "porta_esquerda":      (386,  535),
+    "porta_direita":       (1540, 544),
+    "luz_esquerda":        (371,  645),
+    "luz_direita":         (1527, 653),
+    "abrir_fechar_camera": (870,  869),
+    "camera_1a":           (1311, 549),
+    "camera_1b":           (1268, 603),
+    "camera_1c":           (1253, 666),
+    "camera_2a":           (1307, 794),
+    "camera_2b":           (1298, 828),
+    "camera_3":            (1220, 766),
+    "camera_4a":           (1411, 796),
+    "camera_4b":           (1404, 841),
+    "camera_5":            (1169, 632),
+    "camera_6":            (1497, 764),
+    "camera_7":            (1523, 620),
 }
 
 
@@ -89,7 +89,7 @@ class FNAFEnv(gym.Env):
 
         self.capture.clicar(676, 619)
         time.sleep(15)
-        self.capture.clicar(676, 619)
+        self.capture.clicar(575, 606)
         time.sleep(20)
 
         print("Reset completo — noite iniciada!")
