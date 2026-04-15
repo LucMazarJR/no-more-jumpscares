@@ -31,7 +31,7 @@ class GameCapture:
         regiao = {"top": 0, "left": 0, "width": 1920, "height": 1080}
         """
         if regiao is None:
-            monitor = self.sct.monitors[2]  # monitor principal
+            monitor = self.sct.monitors[1]  # monitor principal
         else:
             monitor = regiao
 

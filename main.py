@@ -13,19 +13,20 @@ def modo_treino():
     from src.agent.train import treinar
     import os, glob
 
-    # Procura o modelo mais recente automaticamente
-    modelos = glob.glob("modelos/fnaf_ppo_*.zip")
-    ultimo_modelo = max(modelos, key=os.path.getctime) if modelos else None
+    # Prioriza o modelo merged se existir
+    if os.path.exists("modelos/fnaf_merged.zip"):
+        ultimo_modelo = "modelos/fnaf_merged.zip"
+        print(f"Usando modelo merged!")
+    else:
+        modelos = glob.glob("modelos/*.zip")
+        ultimo_modelo = max(modelos, key=os.path.getctime) if modelos else None
 
     if ultimo_modelo:
         print(f"Continuando treino: {ultimo_modelo}")
     else:
         print("Nenhum modelo encontrado — começando do zero")
 
-    treinar(
-        timesteps=500_000,
-        carregar_modelo=ultimo_modelo
-    )
+    treinar(timesteps=500_000, carregar_modelo=ultimo_modelo)
 
 if __name__ == "__main__":
     modo = sys.argv[1] if len(sys.argv) > 1 else "teste"
