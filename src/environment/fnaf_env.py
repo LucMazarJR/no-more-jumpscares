@@ -30,22 +30,22 @@ ACOES = {
 }
 
 COORDS = {
-    "porta_esquerda":      (375,  537),
-    "porta_direita":       (1545, 537),
-    "luz_esquerda":        (371,  643),
-    "luz_direita":         (1530, 647),
-    "abrir_fechar_camera": (887,  854),
-    "camera_1a":           (1303, 545),
-    "camera_1b":           (1284, 605),
-    "camera_1c":           (1238, 679),
-    "camera_2a":           (1303, 732),
-    "camera_2b":           (1303, 789),
-    "camera_3":            (1305, 834),
-    "camera_4a":           (1207, 775),
-    "camera_4b":           (1396, 792),
-    "camera_5":            (1415, 842),
-    "camera_6":            (1168, 625),
-    "camera_7":            (1493, 758),
+    "porta_esquerda":      (256,  514),
+    "porta_direita":       (1415, 530),
+    "luz_esquerda":        (253,  621),
+    "luz_direita":         (1318, 641),
+    "abrir_fechar_camera": (818,  832),
+    "camera_1a":           (1191, 530),
+    "camera_1b":           (1169, 585),
+    "camera_1c":           (1130, 657),
+    "camera_2a":           (1179, 773),
+    "camera_2b":           (1183, 813),
+    "camera_3":            (1092, 759),
+    "camera_4a":           (1292, 776),
+    "camera_4b":           (1281, 815),
+    "camera_5":            (1058, 610),
+    "camera_6":            (1375, 748),
+    "camera_7":            (1390, 610),
 }
 
 
@@ -87,9 +87,9 @@ class FNAFEnv(gym.Env):
         self.capture.focar_janela("Five Nights at Freddy's")
         time.sleep(0.5)
 
-        self.capture.clicar(676, 619)
+        self.capture.clicar(464, 596)
         time.sleep(15)
-        self.capture.clicar(676, 619)
+        self.capture.clicar(464, 596)
         time.sleep(20)
 
         print("Reset completo — noite iniciada!")
@@ -165,11 +165,32 @@ class FNAFEnv(gym.Env):
     def _carregar_templates(self):
         refs = Path(__file__).parent.parent / "utils" / "referencias"
 
-        morte_img   = cv2.imread(str(refs / "morte.jpg"),   cv2.IMREAD_GRAYSCALE)
-        vitoria_img = cv2.imread(str(refs / "vitoria.png"), cv2.IMREAD_GRAYSCALE)
+        def _ler_primeira_existente(*nomes):
+            for nome in nomes:
+                caminho = refs / nome
+                if caminho.exists():
+                    imagem = cv2.imread(str(caminho), cv2.IMREAD_GRAYSCALE)
+                    if imagem is not None:
+                        return imagem, nome
+            return None, None
 
-        if morte_img is None or vitoria_img is None:
-            raise FileNotFoundError("Imagens de referência não encontradas em utils/referencias/")
+        morte_img, morte_nome = _ler_primeira_existente("morte.png", "morte.jpg", "morte.jpeg")
+        vitoria_img, vitoria_nome = _ler_primeira_existente("vitoria.png", "vitoria.jpg", "vitoria.jpeg")
+
+        faltando = []
+        if morte_img is None:
+            faltando.append("morte.(png/jpg)")
+        if vitoria_img is None:
+            faltando.append("vitoria.(png/jpg)")
+
+        if faltando:
+            raise FileNotFoundError(
+                "Imagens de referência não encontradas em src/utils/referencias/: "
+                + ", ".join(faltando)
+                + ". Rode: python -m src.utils.calibrar morte e python -m src.utils.calibrar vitoria"
+            )
+
+        print(f"Referências carregadas: {morte_nome}, {vitoria_nome}")
 
         # Resolução das referências — o frame capturado será redimensionado para isso
         self._ref_size = (morte_img.shape[1], morte_img.shape[0])  # (w, h) = (1280, 720)

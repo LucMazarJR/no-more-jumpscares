@@ -13,7 +13,7 @@ class GameCapture:
         self.sct = mss.mss()
 
 
-    def focar_janela(self, titulo: str = "Five Nights at Freddy's"):
+    def focar_janela(self, titulo: str = "FiveNightsatFreddys (1)"):
         import pygetwindow as gw
     
         janelas = gw.getWindowsWithTitle(titulo)
