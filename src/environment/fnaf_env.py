@@ -2,9 +2,28 @@ import gymnasium as gym
 import numpy as np
 import cv2
 import time
+import os
 from pathlib import Path
 from gymnasium import spaces
 from src.utils.capture import GameCapture
+
+def _carregar_env(caminho: str = ".env") -> None:
+    if not os.path.exists(caminho):
+        return
+
+    with open(caminho, "r", encoding="utf-8") as arquivo:
+        for linha in arquivo:
+            conteudo = linha.strip()
+            if not conteudo or conteudo.startswith("#") or "=" not in conteudo:
+                continue
+
+            chave, valor = conteudo.split("=", 1)
+            chave = chave.strip()
+            valor = valor.strip().strip('"').strip("'")
+            os.environ.setdefault(chave, valor)
+
+
+_carregar_env()
 
 LARGURA = 84
 ALTURA  = 84
@@ -29,23 +48,40 @@ ACOES = {
     16: "camera_7",
 }
 
+def _env_int_obrigatorio(nome: str) -> int:
+    valor = os.getenv(nome)
+    if valor is None or valor.strip() == "":
+        raise ValueError(f"Variavel obrigatoria ausente no .env: {nome}")
+    try:
+        return int(valor)
+    except ValueError:
+        raise ValueError(f"Valor invalido para {nome}: {valor}")
+
+
+def _env_str_obrigatorio(nome: str) -> str:
+    valor = os.getenv(nome)
+    if valor is None or valor.strip() == "":
+        raise ValueError(f"Variavel obrigatoria ausente no .env: {nome}")
+    return valor.strip()
+
+
+def _env_coord(acao: str) -> tuple[int, int]:
+    prefixo = f"FNAF_COORD_{acao.upper()}".replace("-", "_")
+    x = _env_int_obrigatorio(f"{prefixo}_X")
+    y = _env_int_obrigatorio(f"{prefixo}_Y")
+    return x, y
+
+
+WINDOW_TITLE = _env_str_obrigatorio("FNAF_WINDOW_TITLE")
+RESET_CLICK = (
+    _env_int_obrigatorio("FNAF_RESET_CLICK_X"),
+    _env_int_obrigatorio("FNAF_RESET_CLICK_Y"),
+)
+
 COORDS = {
-    "porta_esquerda":      (256,  514),
-    "porta_direita":       (1415, 530),
-    "luz_esquerda":        (253,  621),
-    "luz_direita":         (1318, 641),
-    "abrir_fechar_camera": (818,  832),
-    "camera_1a":           (1191, 530),
-    "camera_1b":           (1169, 585),
-    "camera_1c":           (1130, 657),
-    "camera_2a":           (1179, 773),
-    "camera_2b":           (1183, 813),
-    "camera_3":            (1092, 759),
-    "camera_4a":           (1292, 776),
-    "camera_4b":           (1281, 815),
-    "camera_5":            (1058, 610),
-    "camera_6":            (1375, 748),
-    "camera_7":            (1390, 610),
+    acao: _env_coord(acao)
+    for acao in ACOES.values()
+    if acao != "nada"
 }
 
 
@@ -84,12 +120,12 @@ class FNAFEnv(gym.Env):
         self.vivo             = True
         self.contador_vitoria = 0
 
-        self.capture.focar_janela("Five Nights at Freddy's")
+        self.capture.focar_janela(WINDOW_TITLE)
         time.sleep(0.5)
 
-        self.capture.clicar(464, 596)
+        self.capture.clicar(*RESET_CLICK)
         time.sleep(15)
-        self.capture.clicar(464, 596)
+        self.capture.clicar(*RESET_CLICK)
         time.sleep(20)
 
         print("Reset completo — noite iniciada!")
@@ -206,7 +242,7 @@ class FNAFEnv(gym.Env):
     def _capturar_janela(self) -> np.ndarray:
         """Captura apenas a janela do jogo e redimensiona para a resolução de referência."""
         import pygetwindow as gw
-        janelas = gw.getWindowsWithTitle("Five Nights at Freddy's")
+        janelas = gw.getWindowsWithTitle(WINDOW_TITLE)
         if janelas:
             win = janelas[0]
             regiao = {
