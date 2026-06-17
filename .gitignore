@@ -211,8 +211,10 @@ logs
 logs_analysis
 *.png
 !src/utils/referencias/*.png
+!src/utils/referencias/**/*.png
 *.jpg
 !src/utils/referencias/*.jpg
+!src/utils/referencias/**/*.jpg
 
 
 *.xlsx

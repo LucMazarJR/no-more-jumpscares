@@ -12,7 +12,8 @@
       "Bash(echo \"exit=$? \\(vazio = nao usa\\)\")",
       "Bash(xargs grep -lnE \"import torch\")",
       "Bash(python -c ' *)",
-      "Bash(python -m src.utils.testar_deteccao_ameaca)"
+      "Bash(python -m src.utils.testar_deteccao_ameaca)",
+      "Bash(python -m src.utils.testar_deteccao_energia)"
     ]
   }
 }

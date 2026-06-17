@@ -138,6 +138,25 @@ COORDS = {
 LIMIAR_AMEACA = 0.70  # match acima disto = animatrônico no vão (Decisão 4A)
 DEBOUNCE_VAZIO = 2    # leituras vazias seguidas (luz acesa) p/ limpar a ameaça — absorve flicker
 
+# Leitura de energia (Decisão 4B) — dígitos de "Power left: XX%" (energia começa em 99, máx 2 dígitos)
+ENERGIA_CELULAS_X = (185, 203)
+ENERGIA_CELULA_W = 17
+ENERGIA_Y = (620, 650)
+ENERGIA_LIMIAR_GLIFO = 0.40  # match mínimo p/ aceitar como dígito (abaixo = ambíguo)
+
+
+def validar_leitura_energia(lido, estimativa: float) -> float:
+    """Filtro photo-primary: a foto é a verdade. A simulação (estimativa) desalinha
+    fácil e o Foxy tira grandes pedaços de uma vez, então NÃO se rejeita queda por
+    magnitude. Só barra o impossível (energia subir) e segura quando não há leitura
+    (None); todo decréscimo — inclusive grande — é aceito e re-ancora a estimativa.
+    O reader já devolve None em vez de meio número, então não chega leitura partida."""
+    if lido is None:
+        return estimativa                          # sem leitura (câmera/flicker/0%): mantém
+    if lido > estimativa + 1.0:
+        return estimativa                          # subiu: impossível → erro de leitura
+    return float(lido)                             # decréscimo (inclui Foxy) → re-ancora na foto
+
 CHECKPOINTS_NOITE = [
     (0,   100.0),
     (89,   85.0),   # 1AM
@@ -952,6 +971,13 @@ class FNAFEnv(gym.Env):
         self.template_ameaca_esq = cv2.imread(str(refs / "ameaca_esquerda.png"), cv2.IMREAD_GRAYSCALE)
         self.template_ameaca_dir = cv2.imread(str(refs / "ameaca_direita.png"), cv2.IMREAD_GRAYSCALE)
 
+        # Glifos 0-9 do power (Decisão 4B), binarizados. Opcionais.
+        self.glifos_energia = {}
+        for d in "0123456789":
+            g = cv2.imread(str(refs / "digitos" / f"{d}.png"), cv2.IMREAD_GRAYSCALE)
+            if g is not None:
+                self.glifos_energia[d] = g
+
     def _capturar_janela(self) -> np.ndarray:
         """Captura apenas a janela do jogo e redimensiona para a resolução de referência."""
         import pygetwindow as gw
@@ -1028,6 +1054,43 @@ class FNAFEnv(gym.Env):
                 setattr(self, vaz, n)
                 if n >= DEBOUNCE_VAZIO:
                     setattr(self, est, False)
+
+    def _celula_energia(self, frame_cinza: np.ndarray, i: int) -> np.ndarray:
+        x = ENERGIA_CELULAS_X[i]
+        reg = frame_cinza[ENERGIA_Y[0]:ENERGIA_Y[1], x:x + ENERGIA_CELULA_W]
+        _, binr = cv2.threshold(reg, 130, 255, cv2.THRESH_BINARY)
+        return binr
+
+    def _digito_celula(self, frame_cinza: np.ndarray, i: int):
+        """Lê o algarismo de uma célula. Retorna (dígito|None, vazia:bool).
+        vazia=True quando a célula não tem pixels (nem dígito, nem ambígua)."""
+        celula = self._celula_energia(frame_cinza, i)
+        if int((celula > 0).sum()) < 8:
+            return None, True                          # vazia (sem dígito)
+        melhor, score = None, -1.0
+        for d, g in self.glifos_energia.items():
+            s = float(cv2.matchTemplate(celula, g, cv2.TM_CCOEFF_NORMED).max())
+            if s > score:
+                score, melhor = s, d
+        if score < ENERGIA_LIMIAR_GLIFO:
+            return None, False                         # tem pixels mas não casou: ambíguo
+        return int(melhor), False
+
+    def _ler_energia(self, frame_cinza: np.ndarray):
+        """Lê 'Power left: XX%' por template binarizado (imune ao fundo). O número é
+        alinhado à direita: unidade na célula 2, dezena na 1 só quando ≥10. Devolve
+        None quando não dá pra confiar (câmera/flicker/0% apagado) em vez de chutar."""
+        if not self.glifos_energia:
+            return None
+        unidade, _ = self._digito_celula(frame_cinza, 1)      # célula 2 = unidade
+        if unidade is None:
+            return None                                       # sem unidade: sem leitura
+        dezena, dezena_vazia = self._digito_celula(frame_cinza, 0)  # célula 1 = dezena (opcional)
+        if dezena is not None:
+            return dezena * 10 + unidade
+        if dezena_vazia:
+            return unidade                                    # 1 dígito (dezena vazia)
+        return None                                           # dezena ambígua: não chuta
 
     def _escrever_log_desyncs(self, morreu: bool, sobreviveu: bool) -> None:
         os.makedirs("logs", exist_ok=True)

@@ -83,8 +83,9 @@ def _com_grade(img: np.ndarray) -> np.ndarray:
 
 def quadro(rotulo: str, espera: int = 5):
     PASTA.mkdir(exist_ok=True)
-    print(f"{espera}s para deixar o jogo no estado desejado...")
-    time.sleep(espera)
+    if espera > 0:
+        print(f"{espera}s para deixar o jogo no estado desejado...")
+        time.sleep(espera)
     img = _capturar_janela_cor()
     p = PASTA / f"quadro_{rotulo}.png"
     pg = PASTA / f"quadro_{rotulo}_grade.png"
@@ -162,7 +163,9 @@ if __name__ == "__main__":
 
     cmd = args[0]
     if cmd == "quadro":
-        quadro(args[1] if len(args) > 1 else "sem_rotulo")
+        rotulo = args[1] if len(args) > 1 else "sem_rotulo"
+        espera = int(args[2]) if len(args) > 2 else 5  # 0 = captura instantânea
+        quadro(rotulo, espera)
     elif cmd == "diag":
         diagnostico()
     elif cmd == "regiao":
