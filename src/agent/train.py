@@ -4,11 +4,14 @@ import time
 import keyboard
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from src.environment.fnaf_env import FNAFEnv
 from src.agent.multimodal_policy import MultimodalExtractor
 
 PASTA_MODELOS = "modelos"
 PASTA_LOGS    = "logs"
+GAMMA         = 0.995  # usado no PPO e no VecNormalize — precisam casar
+CAMINHO_STATS = f"{PASTA_MODELOS}/vecnormalize.pkl"
 os.makedirs(PASTA_MODELOS, exist_ok=True)
 os.makedirs(PASTA_LOGS,    exist_ok=True)
 
@@ -75,7 +78,12 @@ class LogCallback(BaseCallback):
                 self._pausa_disponivel = False
 
         info = self.locals.get("infos", [{}])[0]
-        self.recompensa_total += self.locals.get("rewards", [0])[0]
+        # Com VecNormalize, locals["rewards"] vem normalizado; loga a recompensa real.
+        try:
+            recompensa_step = self.training_env.get_original_reward()[0]
+        except Exception:
+            recompensa_step = self.locals.get("rewards", [0])[0]
+        self.recompensa_total += recompensa_step
 
         energia = info.get("energia")
         if energia is not None:
@@ -170,7 +178,12 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     print("Dica: segure F12 a qualquer momento para pausar.\n")
     time.sleep(3)
 
-    env = FNAFEnv()
+    env_base = DummyVecEnv([lambda: FNAFEnv()])
+    if carregar_modelo and os.path.exists(CAMINHO_STATS):
+        print(f"Carregando normalizacao: {CAMINHO_STATS}")
+        env = VecNormalize.load(CAMINHO_STATS, env_base)
+    else:
+        env = VecNormalize(env_base, norm_obs=False, norm_reward=True, gamma=GAMMA)
 
     if carregar_modelo and os.path.exists(carregar_modelo):
         print(f"Carregando modelo: {carregar_modelo}")
@@ -188,7 +201,7 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
             n_steps=2048,
             batch_size=64,
             n_epochs=10,
-            gamma=0.995,
+            gamma=GAMMA,
             ent_coef=0.01,
             verbose=0,
             tensorboard_log=PASTA_LOGS,
@@ -221,7 +234,9 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
 
         caminho_final = f"{PASTA_MODELOS}/fnaf_ppo_final"
         modelo.save(caminho_final)
+        env.save(CAMINHO_STATS)
         print(f"\nModelo final salvo em: {caminho_final}")
+        print(f"Normalizacao salva em: {CAMINHO_STATS}")
 
         env.close()
 

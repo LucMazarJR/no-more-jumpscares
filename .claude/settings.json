@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import stable_baselines3 as sb3; from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize; import inspect; print\\('SB3', sb3.__version__\\); sig=inspect.signature\\(VecNormalize.__init__\\); print\\('VecNormalize params:', [p for p in sig.parameters if p in \\('norm_obs','norm_reward','gamma'\\)]\\); print\\('VecNormalize.load:', hasattr\\(VecNormalize,'load'\\), '| get_original_reward:', hasattr\\(VecNormalize,'get_original_reward'\\), '| save:', hasattr\\(VecNormalize,'save'\\)\\)\")",
+      "Bash(git check-ignore *)"
+    ]
+  }
+}

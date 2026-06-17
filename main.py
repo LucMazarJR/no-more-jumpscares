@@ -70,6 +70,9 @@ def modo_jogar():
         return
 
     print(f"Carregando modelo: {caminho}")
+    # Sem VecNormalize aqui de propósito: o treino normaliza só a recompensa
+    # (norm_obs=False), então a política vê a observação crua igual no treino.
+    # As stats de normalização só importam para retomar o treino, não para jogar.
     env = FNAFEnv()
     modelo = PPO.load(caminho, env=env)
 
