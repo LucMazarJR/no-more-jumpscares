@@ -39,6 +39,8 @@ def modo_teste():
     print(f"  - Câmera aberta: {obs['estados'][4]}")
     print(f"  - Câmera ativa: {obs['estados'][5]:.2f}")
     print(f"  - Energia: {obs['estados'][6]*100:.1f}%")
+    print(f"  - Ameaça esquerda: {obs['estados'][8]}")
+    print(f"  - Ameaça direita: {obs['estados'][9]}")
     input("O jogo iniciou a noite 1? (aperta Enter para confirmar)")
     env.close()
 

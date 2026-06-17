@@ -52,9 +52,11 @@ class GameplayDataset(Dataset):
             frame = np.zeros((84, 84), dtype=np.uint8)
         frame = np.expand_dims(frame, axis=-1)  # (84, 84, 1)
 
-        # 8 estados normalizados — espelha FNAFEnv._capturar_observacao().
+        # 10 estados normalizados — espelha FNAFEnv._capturar_observacao().
         # Datasets antigos sem os campos de estado usam valores neutros:
-        # energia=100 (cheio), tempo=0 (início), demais=0 (inativo).
+        # energia=100 (cheio), tempo=0 (início), demais=0 (inativo). A ameaça
+        # (Decisão 4A) não é gravada e o frame salvo é 84x84 (pequeno p/ o template
+        # 1280x720), então fica neutra=0 no BC; o RL a computa ao vivo.
         estados = np.array([
             float(dado.get("porta_esq", 0)),
             float(dado.get("porta_dir", 0)),
@@ -64,6 +66,8 @@ class GameplayDataset(Dataset):
             float(dado.get("camera_ativa", 0)) / 11.0,
             float(dado.get("energia", 100)) / 100.0,
             min(float(dado.get("tempo_ep", 0)) / 535.0, 1.0),
+            float(dado.get("ameaca_esq", 0)),
+            float(dado.get("ameaca_dir", 0)),
         ], dtype=np.float32)
 
         acao = int(dado["acao"])

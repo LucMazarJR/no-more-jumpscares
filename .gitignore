@@ -210,8 +210,9 @@ __marimo__/
 logs
 logs_analysis
 *.png
-!src/utils/referencias/camera_aberta.png
+!src/utils/referencias/*.png
 *.jpg
+!src/utils/referencias/*.jpg
 
 
 *.xlsx

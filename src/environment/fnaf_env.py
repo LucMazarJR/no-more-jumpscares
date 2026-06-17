@@ -7,7 +7,7 @@ import subprocess
 import unicodedata
 from pathlib import Path
 from gymnasium import spaces
-from src.utils.capture import GameCapture
+from src.utils.capture import GameCapture, regiao_cliente
 
 def _carregar_env(caminho: str = ".env") -> None:
     if not os.path.exists(caminho):
@@ -135,6 +135,9 @@ COORDS = {
 }
 
 # Checkpoints de energia por horário da noite (tempo em segundos, energia esperada %)
+LIMIAR_AMEACA = 0.70  # match acima disto = animatrônico no vão (Decisão 4A)
+DEBOUNCE_VAZIO = 2    # leituras vazias seguidas (luz acesa) p/ limpar a ameaça — absorve flicker
+
 CHECKPOINTS_NOITE = [
     (0,   100.0),
     (89,   85.0),   # 1AM
@@ -165,7 +168,7 @@ class FNAFEnv(gym.Env):
             ),
             "estados": spaces.Box(
                 low=0, high=1,
-                shape=(8,),
+                shape=(10,),
                 dtype=np.float32
             )
         })
@@ -202,6 +205,10 @@ class FNAFEnv(gym.Env):
         self._log_desyncs_path    = "logs/desyncs.log"
         self._horas_bonificadas: set = set()
         self._total_bonus_hora: float = 0.0
+        self.ameaca_esq = False
+        self.ameaca_dir = False
+        self._vazio_esq = 0
+        self._vazio_dir = 0
 
     def _janela_do_jogo_aberta(self) -> bool:
         import pygetwindow as gw
@@ -460,6 +467,10 @@ class FNAFEnv(gym.Env):
         self._count_sync_porta        = 0
         self._horas_bonificadas       = set()
         self._total_bonus_hora        = 0.0
+        self.ameaca_esq               = False
+        self.ameaca_dir               = False
+        self._vazio_esq               = 0
+        self._vazio_dir               = 0
 
         if not self._janela_do_jogo_aberta():
             self._abrir_jogo_fallback()
@@ -867,8 +878,9 @@ class FNAFEnv(gym.Env):
         # Captura apenas a janela do jogo — mesma região usada na detecção de
         # morte/vitória e na gravação de gameplay (BC). Capturar a tela inteira
         # diluía o jogo em meio ao desktop no frame 84x84.
-        frame = self._capturar_janela()
-        frame = cv2.resize(frame, (LARGURA, ALTURA))
+        frame_cinza = self._capturar_janela()
+        self._atualizar_ameaca(frame_cinza)
+        frame = cv2.resize(frame_cinza, (LARGURA, ALTURA))
         frame = np.expand_dims(frame, axis=-1)
 
         estados = np.array([
@@ -880,6 +892,8 @@ class FNAFEnv(gym.Env):
             float(self.camera_ativa) / 11.0,
             float(self.energia) / 100.0,
             min(self.tempo_jogo / 535.0, 1.0),
+            float(self.ameaca_esq),
+            float(self.ameaca_dir),
         ], dtype=np.float32)
 
         return {"imagem": frame, "estados": estados}
@@ -933,6 +947,11 @@ class FNAFEnv(gym.Env):
         h, w = vitoria_img.shape
         self.template_vitoria = vitoria_img[int(h * 0.38):int(h * 0.58), int(w * 0.38):int(w * 0.62)]
 
+        # Templates de ameaça (Decisão 4A): rosto do animatrônico no vão, por lado.
+        # Opcionais — se faltarem, a detecção fica desligada (não quebra o treino).
+        self.template_ameaca_esq = cv2.imread(str(refs / "ameaca_esquerda.png"), cv2.IMREAD_GRAYSCALE)
+        self.template_ameaca_dir = cv2.imread(str(refs / "ameaca_direita.png"), cv2.IMREAD_GRAYSCALE)
+
     def _capturar_janela(self) -> np.ndarray:
         """Captura apenas a janela do jogo e redimensiona para a resolução de referência."""
         import pygetwindow as gw
@@ -941,13 +960,7 @@ class FNAFEnv(gym.Env):
             raise RuntimeError("janela do jogo nao encontrada")
 
         win = janelas[0]
-        regiao = {
-            "left":   win.left,
-            "top":    win.top,
-            "width":  win.width,
-            "height": win.height,
-        }
-        frame = self.capture.capturar_tela(regiao)
+        frame = self.capture.capturar_tela(regiao_cliente(win))  # área cliente: sem barra de título
 
         cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         return cv2.resize(cinza, self._ref_size)
@@ -980,6 +993,41 @@ class FNAFEnv(gym.Env):
             self.contador_vitoria = 0
 
         return self.contador_vitoria >= 3
+
+    def _match_ameaca(self, frame_cinza: np.ndarray, lado: str) -> float:
+        """Score (0–1) de casamento do animatrônico no vão do lado dado.
+        Pura sobre a imagem — dá para validar offline com frames salvos."""
+        template = self.template_ameaca_esq if lado == "esquerdo" else self.template_ameaca_dir
+        if template is None:
+            return 0.0
+        resultado = cv2.matchTemplate(frame_cinza, template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(resultado)
+        return float(max_val)
+
+    def _animatronico_no_vao(self, lado: str) -> float:
+        """Score do animatrônico no vão. Confiável só com a luz daquele lado
+        acesa — sem luz o vão fica escuro e o score cai (tratar com debounce)."""
+        return self._match_ameaca(self._capturar_janela(), lado)
+
+    def _atualizar_ameaca(self, frame_cinza: np.ndarray) -> None:
+        """Atualiza ameaca_esq/dir com debounce. Só lê o lado cuja luz está acesa
+        (sem luz o vão é escuro); segura o último estado com a luz apagada. Uma vez
+        detectada, a ameaça só some após DEBOUNCE_VAZIO leituras vazias seguidas com
+        a luz acesa — absorve o flicker da estática (que lê como escuro)."""
+        for lado, luz, est, vaz in (
+            ("esquerdo", self.luz_esq, "ameaca_esq", "_vazio_esq"),
+            ("direito",  self.luz_dir, "ameaca_dir", "_vazio_dir"),
+        ):
+            if not luz:
+                continue
+            if self._match_ameaca(frame_cinza, lado) > LIMIAR_AMEACA:
+                setattr(self, est, True)
+                setattr(self, vaz, 0)
+            else:
+                n = getattr(self, vaz) + 1
+                setattr(self, vaz, n)
+                if n >= DEBOUNCE_VAZIO:
+                    setattr(self, est, False)
 
     def _escrever_log_desyncs(self, morreu: bool, sobreviveu: bool) -> None:
         os.makedirs("logs", exist_ok=True)

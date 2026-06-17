@@ -94,6 +94,24 @@ class GameCapture:
         pyautogui.hotkey(*teclas)
 
 
+def regiao_cliente(win) -> dict:
+    """Região da ÁREA CLIENTE da janela (sem barra de título nem bordas), em
+    coordenadas de tela. Cai para o retângulo cheio se o win32 falhar."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        hwnd = win._hWnd
+        rect = wintypes.RECT()
+        ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(rect))
+        ponto = wintypes.POINT(0, 0)
+        ctypes.windll.user32.ClientToScreen(hwnd, ctypes.byref(ponto))
+        if rect.right > 0 and rect.bottom > 0:
+            return {"left": ponto.x, "top": ponto.y, "width": rect.right, "height": rect.bottom}
+    except Exception:
+        pass
+    return {"left": win.left, "top": win.top, "width": win.width, "height": win.height}
+
+
 # ─── Teste rápido ────────────────────────────────────────────────
 if __name__ == "__main__":
     print("Iniciando teste de captura...")
