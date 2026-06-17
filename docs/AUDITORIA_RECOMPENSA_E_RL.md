@@ -406,6 +406,72 @@ construir e validar a detecção visual.
 
 ---
 
+## DECISÃO 4B — Percepção fiel dos estados: ler o real em vez de inferir (energia, portas, luz, câmera)
+
+### O problema
+
+Vários dos 8 estados que a IA recebe não são **medidos** do jogo — são **inferidos** pelo env, e a
+inferência erra.
+
+- **Energia é simulada.** `_atualizar_energia` (fnaf_env.py:767) drena `0.104 + itens*0.100` por
+  segundo real. É boa aproximação, mas **nunca bate 100%**: eventos discretos não entram na conta —
+  o **Foxy batendo na porta tira um pedaço acumulativo de energia**, além de variação de framerate
+  e pausa. A IA recebe `energia/100` errado como estado, e o termo de déficit da recompensa
+  (`deficit*0.02`, L859) é calculado sobre o valor errado.
+- **Portas/luz/câmera podem divergir por miss-click.** Já existe validação: o env confere o clique
+  de porta pela cor do botão e tenta de novo (`_verificar_botao_porta`, L221) e lê a câmera por
+  template (`_camera_aberta_por_template`, L210). Mas não é perfeito — fica em ~90% de acerto. Os
+  ~10% restantes são estado interno mentindo para a IA: ela "acha" que a porta está fechada quando
+  não está.
+
+Estado que mente é pior que estado ausente — a IA aprende uma relação que não existe.
+
+### O que mudar
+
+Para cada vetor, **trocar o inferido pelo percebido**, reusando o `matchTemplate` que o projeto já
+usa (morte/vitória/câmera) e a ferramenta `calibrar`.
+
+- **Energia — template por algarismo (não OCR).** A fonte e a posição do "Power left: XX%" são
+  fixas → calibrar 10 glifos (`0`–`9`), recortar a região do número, fatiar em dígitos e dar
+  `matchTemplate` em cada um. (OCR/tesseract seria frágil com fonte de jogo em baixa resolução, e
+  nem está no projeto.) Dois cuidados deixam o leitor robusto quase de graça:
+  - **Prior monotônico:** energia no FNAF1 só **cai**. Rejeite qualquer leitura que *suba*
+    (oclusão/erro) e caia para a simulação; uma queda brusca (Foxy bateu) é aceita — ainda é
+    decréscimo.
+  - **Fallback + re-âncora:** leitura confiável corrige a `energia`; leitura incerta (animação de
+    câmera tapando o número, apagão) cai para a simulação, que preenche o intervalo. Nunca injeta
+    lixo.
+- **Portas/luz/câmera — endurecer a verificação que já existe.** Generalizar o padrão do
+  `_verificar_botao_porta`/`_camera_aberta_por_template`: depois de cada ação, **ler o estado real**
+  (cor do botão / template) e adotar isso como verdade, em vez de confiar no toggle interno. Os
+  ~10% que escapam hoje são onde vale fechar para chegar perto de 100%.
+- **Validar offline antes de ligar.** É o item "percepção" da Decisão 2: um *fixture* de
+  screenshots rotulados (energia 100/99/50/9/1/0; portas e câmera abertas/fechadas) rodando contra
+  o leitor, medindo a precisão. Só sobe para a observação depois de passar.
+
+### Validar que não atrapalha o aprendizado
+
+Trocar "estado que mente" por "estado fiel" **deveria** ajudar — mas confirme, não confie:
+
+- **Meça pelo independente.** Taxa de vitória e tempo de sobrevivência, não a recompensa. Ligue o
+  leitor de energia e a validação de ação **separadamente**, cada um contra o controle (regras de
+  ouro #1 e #3 do plano).
+- **Cuidado com latência.** Energia e tempo correm por wall-clock; um leitor lento muda o **ritmo
+  real** do jogo a cada step e distorce justamente a energia que você quer medir. Mantenha o custo
+  baixo (`matchTemplate` em recortes pequenos).
+- **Fallback obrigatório.** Um detector frágil ligado direto na observação é o mesmo risco de
+  *reward hacking* / estado mentindo que a Decisão 4 alerta — por isso o prior monotônico e o
+  fallback.
+
+### O que esperar
+
+Estado mais fiel → a IA decide sobre a verdade, e some uma fonte de ruído que hoje a faz "ver"
+energia/portas erradas justo nos momentos críticos (eventos do Foxy, miss-clicks na hora da
+ameaça). É a primeira peça da fase de percepção — mais simples que a detecção de ameaça da Decisão
+4 e reusa a mesma calibração/validação, então é o aquecimento natural antes dela.
+
+---
+
 ## DECISÃO 5 — Confirmar por ablação se o ramo de imagem (CNN) contribui
 
 ### O problema
@@ -567,8 +633,9 @@ comprar toda essa complexidade: dá um pouco de memória sem mudar o algoritmo n
   `time.perf_counter()` (fnaf_env.py:767-788); o bug de tempo simulado × real que fazia a energia
   mentir está corrigido. *Melhoria menor:* congelar o relógio durante a pausa F12.
 - **Desenho da observação (IMPLEMENTADO).** Dar os 8 estados estruturados de graça é boa decisão;
-  compensa parte da observabilidade parcial sem custo de LSTM. A lacuna (ameaça por lado) está na
-  Decisão 4.
+  compensa parte da observabilidade parcial sem custo de LSTM. A *fidelidade* desses estados
+  (energia inferida; porta/câmera ~90% por miss-click) está na Decisão 4B, e a lacuna de ameaça por
+  lado na Decisão 4.
 - **Uma instância / `DummyVecEnv` implícito (CORRETO).** Paralelizar dezenas de ambientes **não
   se aplica** — o jogo é instância real controlada por mouse/janela única; tentar corromperia as
   partidas. Manter 1 env é o certo, e é o que faz "eficiência de amostra" ser o critério de tudo
@@ -584,6 +651,7 @@ comprar toda essa complexidade: dá um pouco de memória sem mudar o algoritmo n
 | 2 | Teste de sanidade antes de treinar | baixo | Indireto — não melhora a política, mas evita queimar treinos com incentivo errado | guard-rail que protege a #1 |
 | 3 | `VecNormalize(norm_reward)` | baixo | Médio-alto — treino mais estável e converge mais rápido | estabiliza o treino com magnitudes díspares |
 | 4 | Detecção + sinal causal de bloqueio | alto | **Alto** (se a detecção for boa) — maior salto de eficiência de amostra | maior lever de aprendizado, mas exige construir/validar detecção |
+| 4B | Percepção fiel dos estados (energia/ação real) | médio | Médio-alto — remove estado que mente (energia do Foxy, miss-clicks) | mesma fase/máquina da #4; fazer antes dela como aquecimento |
 | 5 | Ablação do ramo de imagem | baixo | Indireto — diagnóstico; pode revelar um bug que vale muito corrigir | garante que a CNN paga o próprio custo |
 | 6 | Schedules de entropia/LR e `gamma` | médio | Médio — melhora a exploração inicial e a convergência final | só compensa sobre recompensa já sã |
 | 7 | RecurrentPPO + LSTM | alto | Alto potencial / **alto risco** — eleva o teto, mas pode piorar se a base não estiver sã | maior teto, maior risco; por último |
@@ -632,10 +700,14 @@ regras de ouro valem para *todas* as fases:
 - **Por quê aqui:** decide se vale investir na detecção visual da Fase 4. Se a CNN estiver inerte,
   conserte isso antes — não adianta construir detecção sobre uma imagem que a rede ignora.
 
-### Fase 4 — Sinal causal (Decisão 4)
-- **Faça:** construir a detecção de ameaça e **validá-la isolada** (fixture de prints rotulados)
-  **antes** de ligá-la na recompensa. Depois, adicionar o shaping potential-based (Opção B) e expor
-  a ameaça nos estados.
+### Fase 4 — Percepção (Decisão 4B, depois 4)
+- **Comece pela Decisão 4B:** ler energia real (template por algarismo + prior monotônico +
+  fallback) e endurecer a validação de porta/câmera para ~100%. É mais simples, reusa a calibração
+  e já corrige um estado que a IA usa hoje. Valide isolada (fixture de prints) e confirme métrica
+  independente antes de seguir.
+- **Depois, a Decisão 4:** construir a detecção de ameaça e **validá-la isolada** (fixture de prints
+  rotulados) **antes** de ligá-la na recompensa. Depois, adicionar o shaping potential-based (Opção
+  B) e expor a ameaça nos estados.
 - **Trava:** sobrevivência melhora **e** sem sinal de *reward hacking* — verifique episódios em que
   a recompensa de shaping foi alta mas a sobrevivência foi baixa (denuncia o agente explorando o
   falso positivo do detector).
