@@ -815,7 +815,7 @@ class FNAFEnv(gym.Env):
             if t_cp not in self._horas_bonificadas and tempo_ep >= t_cp:
                 self._horas_bonificadas.add(t_cp)
                 ratio = min(self.energia / e_cp, 1.5) if e_cp > 0 else (1.0 if self.energia > 0 else 0.0)
-                bonus_hora += max(ratio * 50.0, 5.0)  # 5 a 75
+                bonus_hora += max(ratio * 8.0, 1.0)  # 1 a 12
         self._total_bonus_hora += bonus_hora
 
         if not acao_valida:
@@ -833,33 +833,33 @@ class FNAFEnv(gym.Env):
         # Penalidade por ação repetida (verifica se é igual à ação do step anterior)
         if nome_acao in ["porta_esquerda", "porta_direita", "luz_esquerda", "luz_direita"]:
             if nome_acao == self.penultima_acao:
-                recompensa -= 1.5  # 2x seguidas = spam
+                recompensa -= 0.15  # ~1/3 da base; desencoraja sem dominar
         elif nome_acao == "nada":
             # Permite descanso até 8 steps (~2s); penaliza inação prolongada
             if self.contador_nada > 8:
-                recompensa -= min((self.contador_nada - 8) * 0.15, 2.0)
+                recompensa -= min((self.contador_nada - 8) * 0.05, 0.5)
         elif nome_acao == self.penultima_acao:
             # Câmera ou toggle repetidos: penaliza só quando realmente repetido
-            recompensa -= 1.0
+            recompensa -= 0.1
 
         # Pequena penalidade por usar luzes (gasta energia sem observar)
         if nome_acao in ["luz_esquerda", "luz_direita"]:
-            recompensa -= 0.2
+            recompensa -= 0.05
 
         # Penalidade por ter ambas as portas fechadas (raramente necessário)
         if self.porta_esq and self.porta_dir:
-            recompensa -= 1.0
+            recompensa -= 0.1
 
         # Penalidade por inatividade da câmera — Foxy corre a cada ~5s sem câmera
         if self.passos_sem_camera > 20:
             excesso = self.passos_sem_camera - 20
-            recompensa -= min(excesso * 0.05, 1.0)
+            recompensa -= min(excesso * 0.02, 0.3)
 
         # Penalidade por energia abaixo do esperado para o momento da noite
         deficit = max(0.0, self._energia_esperada() - self.energia)
         recompensa -= deficit * 0.02
 
-        recompensa = max(recompensa, -2.0)
+        recompensa = max(recompensa, -1.0)
 
         return recompensa
 
