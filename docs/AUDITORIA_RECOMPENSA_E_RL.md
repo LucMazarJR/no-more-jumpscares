@@ -561,6 +561,14 @@ porque a imagem é a fonte das pistas de ameaça.
 
 ## DECISÃO 6 — Schedules de exploração e horizonte (`ent_coef`, `learning_rate`, `gamma`)
 
+> **STATUS: APLICADA — bundle pragmático (gate de eficácia pendente).** `gamma` 0.995→**0.997**
+> (`fnaf_env.GAMMA`); `learning_rate` 3e-4 fixo → **`linear(3e-4, 3e-5)`**; `ent_coef` 0.01 →
+> **0.02 decaindo p/ 0.005** via callback `EntropiaSchedule` (só decai depois da taxa de vitória
+> ≥20%/50 eps — nunca antes de vencer, nunca a 0). Os 3 mudaram juntos (amostra escassa); o guia de
+> **isolamento** (mapa sintoma→botão, caso piore) está em `REFERENCIA_HIPERPARAMETROS.md`. Validado
+> offline (schedules + telescoping com 0.997). **Rodar em treino FRESCO** (`main.py treino --novo`,
+> salvando o controle antes); o gate (vitória/sobrevivência vs. controle) entra junto da Decisão 7.
+
 ### O problema
 
 Hoje são constantes: `learning_rate=3e-4`, `ent_coef=0.01`, `gamma=0.995` (train.py:187,192,191).

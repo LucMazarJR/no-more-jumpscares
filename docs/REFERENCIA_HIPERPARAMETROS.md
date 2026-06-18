@@ -302,3 +302,36 @@ Isso é relevante porque **mudanças na dimensão de qualquer campo invalidam o 
 salvo**. Se o número de estados mudar de 8 para 9, o `Linear(8, 32)` do MLP não
 carrega os pesos antigos. Qualquer modificação no `observation_space` exige reinício
 do treinamento do zero.
+
+---
+
+## Decisão 6 — bundle de schedules: o que mudou junto e como isolar
+
+**Aplicado (junho/2026).** Os 3 botões mudaram **de uma vez** (bundle pragmático — amostra é o
+recurso escasso, 3-4 runs isolados sai caro). Por isso este guia: se o bundle **piorar**, reverter
+**um botão por vez** ao valor de controle e re-treinar uma janela curta para achar o culpado.
+
+**O que está no bundle:**
+- `gamma`: 0.995 → **0.997** (horizonte ~200 → ~333 steps; a vitória propaga melhor pro início).
+  Em `fnaf_env.GAMMA` (fonte única: PPO + VecNormalize + shaping Φ). **Só em treino fresco.**
+- `learning_rate`: 3e-4 fixo → **`linear(3e-4, 3e-5)`** — decai ao longo do treino; **piso 3e-5**
+  (não 0) para não congelar a retomada (o `progress_remaining` reinicia a cada `learn()`).
+- `ent_coef`: 0.01 → **0.02 inicial, decai até 0.005** via callback `EntropiaSchedule`, **gateado**
+  pela taxa de vitória (≥20% numa janela de 50 episódios) — só consolida (decai) **depois de
+  começar a vencer**; nunca vai a 0.
+
+**Mapa sintoma → botão culpado** (reusa os sintomas das seções acima):
+
+| sintoma nos logs (`treino.log` / tensorboard) | suspeito | reverter para |
+|---|---|---|
+| crítico instável, loss diverge, vitória **aparece e some** bruscamente | gamma alto **ou** LR alto cedo | gamma 0.995 / LR fixo 3e-4 |
+| caótico, nunca converge, ação ~aleatória mesmo após muito treino | ent_coef alto | ent_coef 0.01 fixo |
+| **congela cedo**, repete a mesma ação, exploração some | ent_coef decaiu cedo (gate baixo) **ou** LR caiu rápido | subir o `gate` do `EntropiaSchedule` / piso do LR |
+| aprende lento, não "esquece" comportamento ruim | piso de LR baixo demais | subir o piso (ex.: 1e-4) |
+
+**Lembretes:**
+- gamma ≥ 0.999 → horizonte > episódio → crítico instável; 0.997 está na faixa segura (0.993–0.997).
+- O `EntropiaSchedule` **não decai antes do gate** — se o agente nunca vence, `ent_coef` fica em 0.02
+  o treino todo (explora, não congela). Isso é proposital.
+- **Medir sempre por taxa de vitória / tempo de sobrevivência**, nunca pela recompensa (muda entre
+  versões). Salvar o controle (`modelos/*.zip` + `vecnormalize.pkl`) **antes** de treinar.

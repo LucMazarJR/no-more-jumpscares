@@ -32,7 +32,8 @@
       "Bash(venv/Scripts/python.exe -c \"import src.utils.monitor; import src.utils.testar_deteccao_ameaca; print\\('imports OK'\\)\")",
       "Bash(venv/Scripts/python.exe -m src.utils.ablacao_offline)",
       "Bash(venv/Scripts/python.exe -m src.utils.testar_deteccao_energia)",
-      "Bash(venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('main.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/utils/ablacao_offline.py',encoding='utf-8'\\).read\\(\\)\\); print\\('main.py + ablacao_offline.py sintaxe OK'\\)\")"
+      "Bash(venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('main.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('src/utils/ablacao_offline.py',encoding='utf-8'\\).read\\(\\)\\); print\\('main.py + ablacao_offline.py sintaxe OK'\\)\")",
+      "Bash(venv/Scripts/python.exe -c \"import stable_baselines3; print\\('SB3', stable_baselines3.__version__\\)\")"
     ],
     "additionalDirectories": [
       "C:\\Projetos\\no-more-jumpscares\\debug"

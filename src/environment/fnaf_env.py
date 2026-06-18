@@ -145,7 +145,9 @@ ROI_AMEACA = {"esquerdo": (0, 0, 420, 500), "direito": (700, 0, 580, 500)}
 
 # Fator de desconto — FONTE ÚNICA: train.py importa daqui (PPO/VecNormalize) e o shaping
 # potential-based (Decisão 4) usa o mesmo valor. Precisam casar p/ o shaping telescopar.
-GAMMA = 0.995
+# Decisão 6: 0.997 (era 0.995) → horizonte ~333 steps (noite ~700), a vitória propaga melhor.
+# Mudar SÓ em treino fresco: VecNormalize/crítico ficam presos ao gamma antigo ao retomar.
+GAMMA = 0.997
 
 # Detecção do Bonnie à esquerda — estado HELD (Decisão 4). A "sombra" do Bonnie no vão é
 # escura IGUAL à luz apagada (ele PROJETA a sombra, e no escuro o vão também é escuro), então

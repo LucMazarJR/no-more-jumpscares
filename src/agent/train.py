@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+from collections import deque
 import keyboard
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
@@ -15,6 +16,12 @@ PASTA_LOGS    = "logs"
 CAMINHO_STATS = f"{PASTA_MODELOS}/vecnormalize.pkl"
 os.makedirs(PASTA_MODELOS, exist_ok=True)
 os.makedirs(PASTA_LOGS,    exist_ok=True)
+
+
+def linear(inicio: float, fim: float = 0.0):
+    """Schedule linear do SB3 (Decisão 6): recebe o progresso RESTANTE (1.0 → 0.0) e vai de
+    `inicio` (começo do treino) a `fim` (fim). Usado p/ o learning_rate decair."""
+    return lambda progresso_restante: fim + (inicio - fim) * progresso_restante
 
 def _carregar_env(caminho: str = ".env") -> None:
     if not os.path.exists(caminho):
@@ -173,6 +180,44 @@ class LogCallback(BaseCallback):
             self.arquivo_log_steps.close()
 
 
+class EntropiaSchedule(BaseCallback):
+    """Decai ent_coef de `inicio` p/ `fim` (Decisão 6), mas SÓ depois da taxa de vitória numa
+    janela recente cruzar `gate` — antes disso mantém alto (explorar / não congelar antes de
+    vencer). NUNCA vai a 0 (o md avisa: congela em política subótima). O PPO lê model.ent_coef
+    (float) a cada train(), então basta setá-lo entre rollouts.
+
+    O gate abre uma vez e não fecha: uma vez que o agente passa a vencer com consistência, começa
+    a consolidar (decair). Se nunca cruzar o gate, ent_coef fica em `inicio` o treino todo."""
+    def __init__(self, inicio: float = 0.02, fim: float = 0.005, gate: float = 0.20,
+                 janela: int = 50):
+        super().__init__()
+        self.inicio, self.fim, self.gate, self.janela = inicio, fim, gate, janela
+        self.resultados = deque(maxlen=janela)   # 1 = vitória, 0 = morte (ignora interrompidos)
+        self._prog_gate = None                   # progress_remaining quando o gate abriu
+
+    def _on_training_start(self) -> None:
+        self.model.ent_coef = self.inicio
+
+    def _on_step(self) -> bool:
+        if self.locals.get("dones", [False])[0]:
+            info = self.locals.get("infos", [{}])[0]
+            if not info.get("interrompido", False):
+                self.resultados.append(0 if info.get("morreu", False) else 1)
+
+        prog = self.model._current_progress_remaining          # 1.0 → 0.0
+        if self._prog_gate is None:
+            taxa = (sum(self.resultados) / len(self.resultados)
+                    if len(self.resultados) >= self.janela else 0.0)
+            if taxa >= self.gate:
+                self._prog_gate = prog                          # abre o decaimento
+        if self._prog_gate is not None:
+            # frac: 0 no gate → 1 no fim do treino
+            frac = 1.0 - (prog / self._prog_gate) if self._prog_gate > 1e-9 else 1.0
+            frac = min(max(frac, 0.0), 1.0)
+            self.model.ent_coef = self.inicio + (self.fim - self.inicio) * frac
+        return True
+
+
 def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bool = False):
     print("Iniciando ambiente FNAF1...")
     print("ATENÇÃO: Deixe o jogo aberto e na tela inicial!")
@@ -198,12 +243,12 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
             policy="MultiInputPolicy",
             env=env,
             policy_kwargs=policy_kwargs,
-            learning_rate=3e-4,
+            learning_rate=linear(3e-4, 3e-5),  # Decisão 6: decai 3e-4 → 3e-5 (piso p/ retomada)
             n_steps=2048,
             batch_size=64,
             n_epochs=10,
             gamma=GAMMA,
-            ent_coef=0.01,
+            ent_coef=0.02,                     # Decisão 6: começa alto; EntropiaSchedule decai depois
             verbose=0,
             tensorboard_log=PASTA_LOGS,
             device="auto",
@@ -215,12 +260,13 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
         name_prefix=f"{_env_str_obrigatorio('PC')}_fnaf_ppo",
     )
     log_callback = LogCallback(log_steps=log_steps)
+    entropia = EntropiaSchedule()  # Decisão 6: decai ent_coef após a taxa de vitória estabilizar
 
     print(f"Treinando por {timesteps:,} timesteps...\n")
     try:
         modelo.learn(
             total_timesteps=timesteps,
-            callback=[checkpoint, log_callback],
+            callback=[checkpoint, log_callback, entropia],
             reset_num_timesteps=carregar_modelo is None,
         )
     except KeyboardInterrupt:
