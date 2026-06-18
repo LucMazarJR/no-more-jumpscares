@@ -105,6 +105,37 @@ def capturar_camera_aberta():
         cv2.imwrite("src/utils/referencias/camera_aberta.png", recorte)
         print("Template salvo em src/utils/referencias/camera_aberta.png!")
 
+def capturar_sombra(estado: str):
+    """
+    Referência do vão da porta esquerda (Decisão 4) — recorte committado em referencias/sombra/.
+    Com a LUZ ESQUERDA acesa, rode com:
+      - 'presente': Bonnie ainda no vão (sombra — std baixo)
+      - 'vazio':    Bonnie saiu, corredor iluminado (std alto)
+    Captura a janela igual ao ambiente (redimensiona p/ 1280x720) e recorta SOMBRA_REGIAO.
+    Os dois juntos calibram LIMIAR_VAZIO (Bonnie ~9.2 < vazio ~11.65 → confirma corredor vazio).
+    """
+    from pathlib import Path
+    from src.utils.capture import melhor_janela, regiao_cliente
+    from src.environment.fnaf_env import SOMBRA_REGIAO, WINDOW_TITLE
+
+    if estado not in ("presente", "vazio"):
+        print("uso: python -m src.utils.calibrar sombra [presente | vazio]")
+        return
+
+    print(f"5 segundos para deixar a luz esquerda acesa, porta fechada, estado '{estado}'...")
+    time.sleep(5)
+
+    win = melhor_janela(WINDOW_TITLE)
+    frame = cv2.resize(cap.capturar_tela(regiao_cliente(win)), (1280, 720))
+    left, top, w, h = SOMBRA_REGIAO
+    recorte = cv2.cvtColor(frame[top:top + h, left:left + w], cv2.COLOR_BGR2GRAY)  # cinza, como as outras refs
+
+    pasta = Path("src/utils/referencias/sombra")
+    pasta.mkdir(parents=True, exist_ok=True)
+    caminho = pasta / f"{estado}.png"
+    cv2.imwrite(str(caminho), recorte)
+    print(f"Referência salva: {caminho}  ({recorte.shape[1]}x{recorte.shape[0]})  std={recorte.std():.2f}")
+
 def capturar_coords():
     import pyautogui
     print("Movendo o mouse sobre os botões do jogo...")
@@ -132,6 +163,8 @@ if __name__ == "__main__":
         capturar_vitoria()
     elif sys.argv[1] == "camera_aberta":
         capturar_camera_aberta()
+    elif sys.argv[1] == "sombra":
+        capturar_sombra(sys.argv[2] if len(sys.argv) > 2 else "")
     else:
         print(f"Argumento desconhecido: {sys.argv[1]}")
-        print("Uso: python -m src.utils.calibrar [morte | vitoria | camera_aberta]")
+        print("Uso: python -m src.utils.calibrar [morte | vitoria | camera_aberta | sombra <presente|vazio>]")

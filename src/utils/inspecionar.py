@@ -20,31 +20,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from src.utils.capture import GameCapture, regiao_cliente
+from src.utils.capture import GameCapture, regiao_cliente, melhor_janela
 from src.environment.fnaf_env import WINDOW_TITLE
 
 REF_W, REF_H = 1280, 720
 PASTA = Path("debug")
 
 
-PALAVRAS_FNAF = ("freddy", "fnaf", "five nights")
-
-
 def _melhor_janela(listar: bool = False):
-    """Escolhe a janela real do jogo. Filtra janelas-fantasma (1x1) e, mesmo se o
-    título vier vazio (sem .env), prefere as que parecem ser o FNAF; entre essas,
-    pega a de maior área."""
-    import pygetwindow as gw
-    janelas = gw.getWindowsWithTitle(WINDOW_TITLE)
-    if not janelas:
-        raise RuntimeError(f"janela '{WINDOW_TITLE}' nao encontrada — o jogo esta aberto?")
-    if listar:
-        print("janelas candidatas:")
-        for w in janelas:
-            print(f"  '{w.title}' left={w.left} top={w.top} {w.width}x{w.height}")
-    reais = [w for w in janelas if w.width > 100 and w.height > 100]
-    fnaf = [w for w in reais if any(p in w.title.lower() for p in PALAVRAS_FNAF)]
-    return max(fnaf or reais or janelas, key=lambda w: w.width * w.height)
+    return melhor_janela(WINDOW_TITLE, listar)  # mesma seleção do ambiente
 
 
 def _capturar_janela_cor() -> np.ndarray:

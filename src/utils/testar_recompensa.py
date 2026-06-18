@@ -6,7 +6,7 @@ estado abstrato (energia, portas, tempo, contadores), nunca pixels.
 Rodar: python -m src.utils.testar_recompensa
 """
 
-from src.environment.fnaf_env import FNAFEnv, ACOES, CHECKPOINTS_NOITE
+from src.environment.fnaf_env import FNAFEnv, ACOES, CHECKPOINTS_NOITE, GAMMA
 
 NOME_PARA_ACAO = {nome: i for i, nome in ACOES.items()}
 
@@ -28,6 +28,8 @@ def _novo_env() -> FNAFEnv:
     env.passos_sem_camera = 0
     env._horas_bonificadas = set()
     env._total_bonus_hora = 0.0
+    env.ameaca_esq = False
+    env.ameaca_dir = False
     return env
 
 
@@ -179,6 +181,41 @@ def test_alvo_d1_bonus_nao_rivaliza_vitoria():
     assert bonus_hora_maximo() < 0.5 * VITORIA
 
 
+# Shaping potential-based (Decisao 4, Opcao B) — testa o potencial e o telescoping.
+def _phi(*, ameaca_esq=False, porta_esq=False, ameaca_dir=False, porta_dir=False) -> float:
+    env = _novo_env()
+    env.ameaca_esq, env.porta_esq = ameaca_esq, porta_esq
+    env.ameaca_dir, env.porta_dir = ameaca_dir, porta_dir
+    return env._potencial_seguranca()
+
+
+def test_phi_bloqueio_supera_exposto():
+    # Ameaca presente: porta fechada (bloqueado) deve ser mais seguro que aberta (exposto).
+    bloqueado = _phi(ameaca_esq=True, porta_esq=True)
+    exposto = _phi(ameaca_esq=True, porta_esq=False)
+    assert bloqueado > exposto
+
+
+def test_phi_sem_ameaca_eh_zero():
+    # Sem ameaca, fechar porta nao da seguranca (Phi=0) — evita premiar fechar a toa.
+    assert _phi(ameaca_esq=False, porta_esq=True, ameaca_dir=False, porta_dir=True) == 0.0
+
+
+def test_shaping_nao_acumula_no_episodio():
+    # Soma do shaping (gamma*Phi' - Phi) num episodio que comeca e termina seguro (Phi=0)
+    # telescopa para ~0 (residuo so do desconto) — nao domina o objetivo verdadeiro.
+    phis = [0.0, 0.5, 0.5, 0.0, 0.0, 0.5, 0.0]  # expoe -> fecha na ameaca -> ameaca sai...
+    soma = sum(GAMMA * phis[i + 1] - phis[i] for i in range(len(phis) - 1))
+    assert abs(soma) < 0.05
+
+
+SHAPING_D4 = [
+    test_phi_bloqueio_supera_exposto,
+    test_phi_sem_ameaca_eh_zero,
+    test_shaping_nao_acumula_no_episodio,
+]
+
+
 ESTAVEIS = [
     test_terminais_ordenados,
     test_proposito_supera_passividade,
@@ -217,8 +254,12 @@ def main() -> int:
     print("\nAlvos da Decisao 1:")
     ok_alvos = _rodar(ALVOS_D1)
 
-    print(f"\nEstaveis: {ok_estaveis}/{len(ESTAVEIS)}   Alvos D1: {ok_alvos}/{len(ALVOS_D1)}")
-    return 0 if ok_estaveis == len(ESTAVEIS) else 1
+    print("\nShaping potential-based (Decisao 4):")
+    ok_shaping = _rodar(SHAPING_D4)
+
+    print(f"\nEstaveis: {ok_estaveis}/{len(ESTAVEIS)}   Alvos D1: {ok_alvos}/{len(ALVOS_D1)}"
+          f"   Shaping D4: {ok_shaping}/{len(SHAPING_D4)}")
+    return 0 if ok_estaveis == len(ESTAVEIS) and ok_shaping == len(SHAPING_D4) else 1
 
 
 if __name__ == "__main__":

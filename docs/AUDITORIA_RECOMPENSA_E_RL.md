@@ -331,6 +331,24 @@ estados = np.array([
 ], dtype=np.float32)
 ```
 
+> **Nota de implementação — `ameaca_esq` é um estado HELD por confirmação positiva (descoberto na
+> validação).** A sombra do Bonnie no vão é **escura idêntica à luz apagada** (ele *projeta* a
+> sombra; no escuro o vão também é escuro) — medido: rosto-template ~0.40 na sombra (igual a vazio),
+> e brilho/std/cor **não** separam "Bonnie" de "luz off". Tentar um detector de luz externo falhou
+> (corredor muda com a porta, botão LIGHT instável). A solução é **não detectar presença direto**,
+> e sim mudar o perigo só por **confirmação positiva**, senão **manter** (`_atualizar_ameaca`):
+>
+> - **rosto do Bonnie casado** (porta aberta, `_match_ameaca > LIMIAR_AMEACA`) → `ameaca_esq = True`;
+> - **corredor vazio iluminado** (textura: `_sombra_no_vao` std `> LIMIAR_VAZIO≈11`, vazio ≈ 11.65 vs
+>   Bonnie/escuro ≈ 9.2) → `ameaca_esq = False` (Bonnie saiu → pode reabrir e poupar energia);
+> - **sombra ou escuro** (std baixo, sem rosto) → **mantém** o último valor (não dá p/ confirmar).
+>
+> Cada transição exige alguns frames seguidos (debounce) p/ absorver a **estática** (que pisca só com
+> a luz acesa). Isso **dispensa o detector de luz**: no escuro nada confirma → mantém, e o perigo só
+> ficou ativo se você **viu o Bonnie antes**. Casa com a mecânica: você só reabre quando **vê o
+> corredor vazio**. A Chica (direita) usa o rosto (gate por `luz_dir`). O `_potencial_seguranca`
+> (Φ) lê o estado da porta pela cor do botão DOOR (`_porta_fechada_visual`, verde=fechada).
+
 **Opção A — bônus direto (simples, mas enviesa).** Recompensa fixa por bloquear certo:
 
 ```python

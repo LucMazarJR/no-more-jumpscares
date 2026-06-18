@@ -7,7 +7,7 @@ import subprocess
 import unicodedata
 from pathlib import Path
 from gymnasium import spaces
-from src.utils.capture import GameCapture, regiao_cliente
+from src.utils.capture import GameCapture, regiao_cliente, melhor_janela
 
 def _carregar_env(caminho: str = ".env") -> None:
     if not os.path.exists(caminho):
@@ -136,7 +136,31 @@ COORDS = {
 
 # Checkpoints de energia por horário da noite (tempo em segundos, energia esperada %)
 LIMIAR_AMEACA = 0.70  # match acima disto = animatrônico no vão (Decisão 4A)
-DEBOUNCE_VAZIO = 2    # leituras vazias seguidas (luz acesa) p/ limpar a ameaça — absorve flicker
+DEBOUNCE_VAZIO = 4    # leituras de "vazio" ACUMULADAS p/ limpar a ameaça — absorve a estática
+
+# Fator de desconto — FONTE ÚNICA: train.py importa daqui (PPO/VecNormalize) e o shaping
+# potential-based (Decisão 4) usa o mesmo valor. Precisam casar p/ o shaping telescopar.
+GAMMA = 0.995
+
+# Detecção do Bonnie à esquerda — estado HELD (Decisão 4). A "sombra" do Bonnie no vão é
+# escura IGUAL à luz apagada (ele PROJETA a sombra, e no escuro o vão também é escuro), então
+# NÃO dá p/ detectar presença direto nem separar do escuro. Em vez disso o estado de perigo só
+# muda por CONFIRMAÇÃO POSITIVA, senão MANTÉM o último valor:
+#   - rosto do Bonnie casado (porta aberta) ............ ameaca_esq = True  (achou o Bonnie)
+#   - corredor VAZIO iluminado (std do vão ALTO) ........ ameaca_esq = False (saiu → pode reabrir)
+#   - sombra/escuro (std baixo, sem rosto) ............. mantém (não dá p/ confirmar)
+# Assim some a dependência de detector de luz: no escuro nada confirma → mantém o estado, que
+# só foi setado se você VIU o Bonnie antes. std medido no vão (x290-480): vazio iluminado ≈
+# 11.65 ; Bonnie/escuro ≈ 9.0-9.3.
+SOMBRA_REGIAO = (290, 80, 190, 440)  # (left, top, larg, alt) em 1280x720 — vão da porta esq
+LIMIAR_VAZIO = 11.0       # std do vão ACIMA disto = corredor vazio iluminado confirmado
+DEBOUNCE_PRESENCA = 2     # frames de rosto seguidos p/ setar a ameaça (absorve estática)
+
+# Estado real da PORTA pela cor do botão DOOR do painel (HUD) — Decisão 4B, mesma convenção
+# do _verificar_botao_porta:  verde (G>R) = FECHADA, vermelho (R>G) = ABERTA. Usado p/ o Φ do
+# shaping (bloqueado = ameaça presente E porta fechada). Regiões em 1280x720 (left,top,larg,alt).
+BOTAO_DOOR = {"esquerdo": (45, 300, 70, 55), "direito": (1170, 300, 70, 75)}
+DOOR_COR_MARGEM = 15      # quanto G precisa superar R (ou vice-versa) p/ não ser ambíguo
 
 # Leitura de energia (Decisão 4B) — dígitos de "Power left: XX%" (energia começa em 99, máx 2 dígitos)
 ENERGIA_CELULAS_X = (185, 203)
@@ -228,6 +252,7 @@ class FNAFEnv(gym.Env):
         self.ameaca_dir = False
         self._vazio_esq = 0
         self._vazio_dir = 0
+        self._presenca_esq = 0
 
     def _janela_do_jogo_aberta(self) -> bool:
         import pygetwindow as gw
@@ -444,7 +469,8 @@ class FNAFEnv(gym.Env):
 
         observacao = {
             "imagem": np.zeros((ALTURA, LARGURA, 1), dtype=np.uint8),
-            "estados": np.zeros(8, dtype=np.float32)
+            # Deriva do espaço (10 estados após a ameaça da Decisão 4) p/ não divergir
+            "estados": np.zeros(self.observation_space["estados"].shape, dtype=np.float32)
         }
         return observacao, 0.0, True, False, info
 
@@ -490,6 +516,7 @@ class FNAFEnv(gym.Env):
         self.ameaca_dir               = False
         self._vazio_esq               = 0
         self._vazio_dir               = 0
+        self._presenca_esq            = 0
 
         if not self._janela_do_jogo_aberta():
             self._abrir_jogo_fallback()
@@ -557,6 +584,9 @@ class FNAFEnv(gym.Env):
                 self.luz_dir = False
                 self.camera_aberta = False
 
+        # Φ antes da ação, para o shaping potential-based (Decisão 4): usa a ameaça
+        # da observação anterior e o estado de porta pré-ação.
+        phi_antes = self._potencial_seguranca()
         acao_valida = self._executar_acao(acao)
         time.sleep(STEP_DELAY)
 
@@ -619,6 +649,11 @@ class FNAFEnv(gym.Env):
 
         recompensa = self._calcular_recompensa(morreu, sobreviveu, acao, acao_valida)
         terminado  = morreu or sobreviveu
+        # Shaping potential-based (Decisão 4, Opção B): soma a variação de segurança.
+        # Telescopa (Σ γ·Φ' − Φ ≈ 0 no episódio), então guia sem mover o ótimo. Φ'=0 no
+        # terminal. Convive com VecNormalize: entra na recompensa crua, antes de normalizar.
+        phi_depois = 0.0 if terminado else self._potencial_seguranca()
+        recompensa += GAMMA * phi_depois - phi_antes
         # Trava de segurança por tempo: a noite dura ~535s. Se a detecção de
         # vitória falhar (template), encerra em vez de ficar preso por horas.
         truncado   = self.passos >= self.max_passos or self.tempo_jogo > 700.0
@@ -827,6 +862,20 @@ class FNAFEnv(gym.Env):
                 return e0 + frac * (e1 - e0)
         return 5.0
 
+    def _potencial_seguranca(self) -> float:
+        """Φ(estado) do shaping potential-based (Decisão 4, Opção B): mede quão segura
+        é a situação AGORA. +0.5 por lado com ameaça PRESENTE e porta FECHADA (bloqueada);
+        0 se a ameaça está exposta (porta aberta) ou não há ameaça. O shaping recompensa
+        só a variação γ·Φ(depois)−Φ(antes), que telescopa ao longo do episódio e por isso
+        NÃO move o ótimo (Ng, Harada & Russell 1999) — só faz o crédito chegar mais cedo,
+        perto da ação de fechar a porta na ameaça."""
+        phi = 0.0
+        if self.ameaca_esq and self.porta_esq:
+            phi += 0.5
+        if self.ameaca_dir and self.porta_dir:
+            phi += 0.5
+        return phi
+
     def _calcular_recompensa(self, morreu: bool, sobreviveu: bool, acao: int, acao_valida: bool) -> float:
         # Magnitudes terminais moderadas: valores extremos (−500/+1000) dominavam
         # a função de valor e criavam alvos com variância enorme em relação às
@@ -980,12 +1029,7 @@ class FNAFEnv(gym.Env):
 
     def _capturar_janela(self) -> np.ndarray:
         """Captura apenas a janela do jogo e redimensiona para a resolução de referência."""
-        import pygetwindow as gw
-        janelas = gw.getWindowsWithTitle(WINDOW_TITLE)
-        if not janelas:
-            raise RuntimeError("janela do jogo nao encontrada")
-
-        win = janelas[0]
+        win = melhor_janela(WINDOW_TITLE)  # mesma seleção do script de captura
         frame = self.capture.capturar_tela(regiao_cliente(win))  # área cliente: sem barra de título
 
         cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -1021,8 +1065,8 @@ class FNAFEnv(gym.Env):
         return self.contador_vitoria >= 3
 
     def _match_ameaca(self, frame_cinza: np.ndarray, lado: str) -> float:
-        """Score (0–1) de casamento do animatrônico no vão do lado dado.
-        Pura sobre a imagem — dá para validar offline com frames salvos."""
+        """Score (0–1) de casamento do animatrônico do lado dado (Bonnie no vão à
+        esquerda, Chica na janela à direita). Puro sobre a imagem — valida offline."""
         template = self.template_ameaca_esq if lado == "esquerdo" else self.template_ameaca_dir
         if template is None:
             return 0.0
@@ -1035,25 +1079,80 @@ class FNAFEnv(gym.Env):
         acesa — sem luz o vão fica escuro e o score cai (tratar com debounce)."""
         return self._match_ameaca(self._capturar_janela(), lado)
 
+    def _sombra_no_vao(self, frame_cinza: np.ndarray, lado: str = "esquerdo") -> float:
+        """Desvio-padrão do cinza na região do vão (textura). Corredor VAZIO iluminado tem
+        textura (bricks/correntes) → std ALTO (> LIMIAR_VAZIO = vazio confirmado). Bonnie no
+        vão OU luz apagada deixam o vão escuro e liso → std BAIXO (não confirma vazio). Puro
+        sobre a imagem → validável offline. Só o lado esquerdo (Bonnie)."""
+        left, top, w, h = SOMBRA_REGIAO
+        reg = frame_cinza[top:top + h, left:left + w]
+        if reg.size == 0:
+            return 0.0
+        return float(reg.std())
+
+    def _porta_fechada_visual(self, frame_cor: np.ndarray, lado: str):
+        """Estado real da porta pela cor do BOTÃO DOOR (mesma convenção do
+        _verificar_botao_porta): verde=fechada → True, vermelho=aberta → False,
+        ambíguo → None. Precisa do frame COLORIDO (BGR)."""
+        left, top, w, h = BOTAO_DOOR[lado]
+        reg = frame_cor[top:top + h, left:left + w]
+        if reg.size == 0:
+            return None
+        g, r = float(reg[:, :, 1].mean()), float(reg[:, :, 2].mean())
+        if g > r + DOOR_COR_MARGEM:
+            return True
+        if r > g + DOOR_COR_MARGEM:
+            return False
+        return None
+
+    def _aplicar_deteccao_ameaca(self, est: str, vaz: str, presente: bool) -> None:
+        """Debounce comum: 'presente' fixa a ameaça e zera o contador; 'vazio' só
+        limpa após DEBOUNCE_VAZIO leituras vazias seguidas — absorve o flicker da
+        estática (que lê como escuro/vazio)."""
+        if presente:
+            setattr(self, est, True)
+            setattr(self, vaz, 0)
+        else:
+            n = getattr(self, vaz) + 1
+            setattr(self, vaz, n)
+            if n >= DEBOUNCE_VAZIO:
+                setattr(self, est, False)
+
     def _atualizar_ameaca(self, frame_cinza: np.ndarray) -> None:
-        """Atualiza ameaca_esq/dir com debounce. Só lê o lado cuja luz está acesa
-        (sem luz o vão é escuro); segura o último estado com a luz apagada. Uma vez
-        detectada, a ameaça só some após DEBOUNCE_VAZIO leituras vazias seguidas com
-        a luz acesa — absorve o flicker da estática (que lê como escuro)."""
-        for lado, luz, est, vaz in (
-            ("esquerdo", self.luz_esq, "ameaca_esq", "_vazio_esq"),
-            ("direito",  self.luz_dir, "ameaca_dir", "_vazio_dir"),
-        ):
-            if not luz:
-                continue
-            if self._match_ameaca(frame_cinza, lado) > LIMIAR_AMEACA:
-                setattr(self, est, True)
-                setattr(self, vaz, 0)
-            else:
-                n = getattr(self, vaz) + 1
-                setattr(self, vaz, n)
-                if n >= DEBOUNCE_VAZIO:
-                    setattr(self, est, False)
+        """Atualiza ameaca_esq/dir.
+
+        Bonnie (esquerda) é um estado HELD: a sombra dele no vão é escura IGUAL à luz
+        apagada, então não dá p/ detectar presença direto. O perigo só muda por
+        CONFIRMAÇÃO POSITIVA, senão MANTÉM:
+          - corredor VAZIO iluminado (std > LIMIAR_VAZIO) → ameaca_esq = False (saiu);
+          - rosto do Bonnie casado (porta aberta)         → ameaca_esq = True;
+          - sombra/escuro (std baixo, sem rosto)          → mantém (não confirma nada).
+        Debounce ACUMULADO (não precisa ser consecutivo): a estática pisca p/ escuro e cai no
+        'mantém', que NÃO zera os contadores — só o sinal real oposto zera. Assim a confirmação
+        acumula através do flicker (antes a estática zerava e a confirmação nunca fechava).
+
+        Chica (direita): aparece na janela com porta aberta OU fechada → rosto, só com a
+        luz direita acesa; some após DEBOUNCE_VAZIO leituras vazias."""
+        # Bonnie (esquerda) — estado HELD, sem gate de luz (o "vazio confirmado" e o "rosto"
+        # já exigem luz acesa; no escuro nada confirma e o estado se mantém).
+        if self._sombra_no_vao(frame_cinza, "esquerdo") > LIMIAR_VAZIO:    # vazio confirmado
+            self._presenca_esq = 0                                         # zera o oposto (real)
+            self._vazio_esq += 1
+            if self._vazio_esq >= DEBOUNCE_VAZIO:
+                self.ameaca_esq = False
+                self._vazio_esq = 0
+        elif self._match_ameaca(frame_cinza, "esquerdo") > LIMIAR_AMEACA:  # rosto confirmado
+            self._vazio_esq = 0                                            # zera o oposto (real)
+            self._presenca_esq += 1
+            if self._presenca_esq >= DEBOUNCE_PRESENCA:
+                self.ameaca_esq = True
+                self._presenca_esq = 0
+        # else: sombra/escuro → MANTÉM estado e contadores (a estática não reseta a confirmação)
+
+        # Chica (direita) — depende da luz direita; independe da porta (sempre rosto)
+        if self.luz_dir:
+            presente_dir = self._match_ameaca(frame_cinza, "direito") > LIMIAR_AMEACA
+            self._aplicar_deteccao_ameaca("ameaca_dir", "_vazio_dir", presente_dir)
 
     def _celula_energia(self, frame_cinza: np.ndarray, i: int) -> np.ndarray:
         x = ENERGIA_CELULAS_X[i]

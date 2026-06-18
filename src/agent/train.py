@@ -5,12 +5,13 @@ import keyboard
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from src.environment.fnaf_env import FNAFEnv
+from src.environment.fnaf_env import FNAFEnv, GAMMA
 from src.agent.multimodal_policy import MultimodalExtractor
 
 PASTA_MODELOS = "modelos"
 PASTA_LOGS    = "logs"
-GAMMA         = 0.995  # usado no PPO e no VecNormalize — precisam casar
+# GAMMA vem do env (fonte única) — usado no PPO, no VecNormalize e no shaping
+# potential-based da Decisão 4; precisam casar p/ o shaping telescopar.
 CAMINHO_STATS = f"{PASTA_MODELOS}/vecnormalize.pkl"
 os.makedirs(PASTA_MODELOS, exist_ok=True)
 os.makedirs(PASTA_LOGS,    exist_ok=True)
