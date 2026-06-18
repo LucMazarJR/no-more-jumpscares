@@ -434,6 +434,14 @@ construir e validar a detecção visual.
 
 ## DECISÃO 4B — Percepção fiel dos estados: ler o real em vez de inferir (energia, portas, luz, câmera)
 
+> **STATUS: energia IMPLEMENTADA (gate de eficácia pendente).** A energia que a IA vê agora é a
+> **lida** do "Power left: XX%" (`_ler_energia`), corrigida pela simulação via filtro photo-primary
+> `validar_leitura_energia` (None mantém / subida rejeita / queda re-ancora) em `_capturar_observacao`.
+> Custo ~1.7 ms/step. Validada offline (`testar_deteccao_energia` 13/13 + filtro) e ao vivo no monitor.
+> **Portas** já são lidas pela cor do botão (`_verificar_botao_porta`, verde=fechada/vermelho=aberta);
+> **câmera** por template ("YOU"). Falta: **luz** ainda é inferida pelo toggle (não lida do botão), e
+> o gate de eficácia (sobrevivência vs. controle) — adiado junto do RecurrentPPO.
+
 ### O problema
 
 Vários dos 8 estados que a IA recebe não são **medidos** do jogo — são **inferidos** pelo env, e a

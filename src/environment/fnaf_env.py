@@ -953,6 +953,10 @@ class FNAFEnv(gym.Env):
         # diluía o jogo em meio ao desktop no frame 84x84.
         frame_cinza = self._capturar_janela()
         self._atualizar_ameaca(frame_cinza)
+        # Decisão 4B — energia REAL: corrige a energia simulada com a leitura visual do
+        # "Power left: XX%" (photo-primary: None mantém a simulação, subida é rejeitada,
+        # queda re-ancora na foto). A simulação (_atualizar_energia) preenche entre leituras.
+        self.energia = validar_leitura_energia(self._ler_energia(frame_cinza), self.energia)
         frame = cv2.resize(frame_cinza, (LARGURA, ALTURA))
         frame = np.expand_dims(frame, axis=-1)
 
