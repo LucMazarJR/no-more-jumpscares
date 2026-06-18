@@ -285,6 +285,14 @@ parte obrigatória da mudança.
 
 ## DECISÃO 4 — Sinal causal de bloqueio: guiar a IA sem "ensinar a jogar do nosso jeito"
 
+> **STATUS: IMPLEMENTADA e integrada (gate de eficácia pendente).** Detecção da ameaça como estado
+> **HELD** por confirmação positiva (rosto seta / corredor vazio limpa / sombra-escuro mantém — ver
+> nota em "O que mudar"), exposta nos 10 estados e ligada na recompensa pelo shaping potential-based
+> (Opção B). `matchTemplate` roda só na **ROI** do rosto (custo da detecção 93→13 ms/step). Validada
+> **offline** (`testar_deteccao_ameaca` 15/15, `testar_recompensa` shaping 3/3) e **ao vivo** no
+> monitor. Falta o **gate de treino** (taxa de vitória/sobrevivência vs. controle) — adiado de
+> propósito para servir de baseline no debug do RecurrentPPO (Decisão 7).
+
 ### O problema
 
 Esta é a maior fonte de ineficiência de aprendizado. No FNAF a ação certa (fechar a porta do lado

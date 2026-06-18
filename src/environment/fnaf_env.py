@@ -137,6 +137,11 @@ COORDS = {
 # Checkpoints de energia por horário da noite (tempo em segundos, energia esperada %)
 LIMIAR_AMEACA = 0.70  # match acima disto = animatrônico no vão (Decisão 4A)
 DEBOUNCE_VAZIO = 4    # leituras de "vazio" ACUMULADAS p/ limpar a ameaça — absorve a estática
+# ROI do rosto por lado (left,top,larg,alt em 1280x720). O rosto aparece em posição fixa
+# (Bonnie x120-270/y160-330; Chica x800-950/y155-325), então o matchTemplate roda só na ROI:
+# frame inteiro ≈ 44 ms/lado, ROI ≈ 9 ms — a auditoria alerta que latência por step distorce
+# a energia/tempo (que correm no relógio real).
+ROI_AMEACA = {"esquerdo": (0, 0, 420, 500), "direito": (700, 0, 580, 500)}
 
 # Fator de desconto — FONTE ÚNICA: train.py importa daqui (PPO/VecNormalize) e o shaping
 # potential-based (Decisão 4) usa o mesmo valor. Precisam casar p/ o shaping telescopar.
@@ -1065,12 +1070,18 @@ class FNAFEnv(gym.Env):
         return self.contador_vitoria >= 3
 
     def _match_ameaca(self, frame_cinza: np.ndarray, lado: str) -> float:
-        """Score (0–1) de casamento do animatrônico do lado dado (Bonnie no vão à
-        esquerda, Chica na janela à direita). Puro sobre a imagem — valida offline."""
+        """Score (0–1) de casamento do rosto do animatrônico (Bonnie no vão à esquerda,
+        Chica na janela à direita), só na ROI daquele lado — o rosto aparece em posição
+        fixa, então restringir o matchTemplate à ROI corta ~75% do custo por step. Puro
+        sobre a imagem — valida offline."""
         template = self.template_ameaca_esq if lado == "esquerdo" else self.template_ameaca_dir
         if template is None:
             return 0.0
-        resultado = cv2.matchTemplate(frame_cinza, template, cv2.TM_CCOEFF_NORMED)
+        left, top, w, h = ROI_AMEACA[lado]
+        roi = frame_cinza[top:top + h, left:left + w]
+        if roi.shape[0] < template.shape[0] or roi.shape[1] < template.shape[1]:
+            roi = frame_cinza  # ROI menor que o template (frame reduzido) → usa o frame todo
+        resultado = cv2.matchTemplate(roi, template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(resultado)
         return float(max_val)
 
