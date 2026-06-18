@@ -508,6 +508,28 @@ ameaça). É a primeira peça da fase de percepção — mais simples que a dete
 
 ## DECISÃO 5 — Confirmar por ablação se o ramo de imagem (CNN) contribui
 
+> **STATUS: tooling PRONTA — 2 ferramentas (falta rodar; precisa de modelo treinado em `modelos/`).**
+>
+> **Pra que serve:** confirmar se a CNN (ramo de imagem) realmente pesa na decisão, ou se está
+> *presente mas inerte* — a política decide só pelos 10 estados e ignora a imagem (o bug que a
+> dupla normalização já tinha causado). Se estiver inerte, paga-se o custo da CNN à toa e perdem-se
+> as pistas visuais de ameaça.
+>
+> **Como funciona / como usar (do mais barato ao definitivo):**
+> 1. **Offline, em segundos** — `python -m src.utils.ablacao_offline`. Mede a *sensibilidade* da
+>    política: o quanto a distribuição de ações muda ao **variar a imagem** (estados fixos) vs.
+>    **variar os estados** (imagem fixa), usando frames reais de `debug/`. **Leitura:** sensibilidade
+>    à imagem ≈ 0 → a CNN está sendo **ignorada**. Usa imagens **reais** (sem o "preto fora da
+>    distribuição") e não precisa do jogo — é o primeiro check.
+> 2. **Comportamental, no jogo** — `python main.py jogar --ablacao imagem` (ou `--ablacao estados`).
+>    Zera aquele ramo da observação antes do `predict` e reporta **taxa de vitória + sobrevivência
+>    média**; comparar com o run cheio (sem flag). É o teste **definitivo** (impacto real no jogo),
+>    mas é lento (tempo real) e a direção "caiu ao zerar a imagem" é **ambígua** (o preto é fora da
+>    distribuição do treino), por isso o offline vem antes.
+>
+> **Conclusão a tirar:** se as duas ferramentas indicarem que a imagem quase não muda a decisão, a
+> CNN está inerte → consertar isso (a imagem é a fonte das pistas de ameaça) rende mais que tuning.
+
 ### O problema
 
 A imagem (ramo CNN — a parte da rede que processa os pixels — multimodal_policy.py:11-19,51) é o

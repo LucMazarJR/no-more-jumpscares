@@ -63,8 +63,22 @@ def modo_treino():
 
 
 def modo_jogar():
-    """Roda o modelo treinado em modo avaliação (sem aprender, determinístico)."""
+    """Roda o modelo treinado em modo avaliação (sem aprender, determinístico).
+
+    Decisão 5 (ablação da CNN): com `--ablacao imagem` ou `--ablacao estados`, zera aquele
+    ramo da observação antes do predict. Se zerar a IMAGEM quase não derrubar a sobrevivência,
+    a CNN não está contribuindo; se zerar os ESTADOS derrubar muito, a política depende deles.
+    Compare a taxa de vitória + sobrevivência média vs. o run cheio (sem flag)."""
+    import numpy as np
     from stable_baselines3 import PPO
+
+    ablacao = None
+    if "--ablacao" in sys.argv:
+        i = sys.argv.index("--ablacao")
+        ablacao = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
+        if ablacao not in ("imagem", "estados"):
+            print("Uso: python main.py jogar [--ablacao imagem|estados]")
+            return
 
     caminho = encontrar_ultimo_modelo()
     if not caminho:
@@ -72,6 +86,8 @@ def modo_jogar():
         return
 
     print(f"Carregando modelo: {caminho}")
+    if ablacao:
+        print(f">>> ABLAÇÃO (Decisão 5): ramo '{ablacao}' ZERADO na observação <<<")
     # Sem VecNormalize aqui de propósito: o treino normaliza só a recompensa
     # (norm_obs=False), então a política vê a observação crua igual no treino.
     # As stats de normalização só importam para retomar o treino, não para jogar.
@@ -80,6 +96,7 @@ def modo_jogar():
 
     episodio = 0
     vitorias = 0
+    tempo_total = 0.0
     try:
         while True:
             episodio += 1
@@ -89,7 +106,11 @@ def modo_jogar():
             info = {}
 
             while not (terminado or truncado):
-                acao, _ = modelo.predict(obs, deterministic=True)
+                obs_pred = obs
+                if ablacao:                       # zera o ramo só para o predict (Decisão 5)
+                    obs_pred = dict(obs)
+                    obs_pred[ablacao] = np.zeros_like(obs[ablacao])
+                acao, _ = modelo.predict(obs_pred, deterministic=True)
                 obs, recompensa, terminado, truncado, info = env.step(int(acao))
                 recompensa_total += recompensa
 
@@ -103,14 +124,18 @@ def modo_jogar():
             else:
                 resultado = "TRUNCADO"
 
+            tempo_total += info.get("tempo", 0.0)
             print(
                 f"Ep {episodio:3d} | {resultado:12s} | "
-                f"Passos: {info.get('passos', 0):5d} | "
-                f"Recompensa: {recompensa_total:8.1f} | "
-                f"Vitórias: {vitorias}/{episodio}"
+                f"sobrev {info.get('tempo', 0.0):5.0f}s ({info.get('passos', 0):4d}p) | "
+                f"rec {recompensa_total:7.1f} | "
+                f"vitórias {vitorias}/{episodio} méd {tempo_total/episodio:.0f}s"
             )
     except KeyboardInterrupt:
-        print(f"\nAvaliação encerrada. Vitórias: {vitorias}/{episodio}")
+        tag = f" [ablação: {ablacao}]" if ablacao else ""
+        media = tempo_total / episodio if episodio else 0.0
+        print(f"\nAvaliação encerrada{tag}. "
+              f"Vitórias: {vitorias}/{episodio} | Sobrevivência média: {media:.0f}s")
     finally:
         env.close()
 
@@ -126,4 +151,5 @@ if __name__ == "__main__":
         modo_jogar()
     else:
         print(f"Modo desconhecido: {modo}")
-        print("Use: python main.py teste | python main.py treino [--novo] | python main.py jogar")
+        print("Use: python main.py teste | python main.py treino [--novo] | "
+              "python main.py jogar [--ablacao imagem|estados]")
