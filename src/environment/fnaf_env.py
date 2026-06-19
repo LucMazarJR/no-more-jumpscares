@@ -122,6 +122,12 @@ RESET_CLICK = (
     _env_int_obrigatorio("FNAF_RESET_CLICK_X"),
     _env_int_obrigatorio("FNAF_RESET_CLICK_Y"),
 )
+# Método de reset (Decisão 7) — define a noite após uma MORTE (a vitória SEMPRE avança):
+#   new_game = volta pra Noite 1 (padrão) ; continue = repete a noite atual.
+# A noite é rastreada internamente pelo desfecho (sem ler a tela — a fonte do "Night X" não casa
+# com os glifos de energia). Se o win/death detection erra, a noite desincroniza (mesmo risco do reward).
+RESET_METODO = _env_str_opcional("FNAF_RESET_METODO", "new_game").lower()
+MAX_NOITE = 7  # p/ normalizar noite/MAX_NOITE no estado (FNAF1: noites 1-6 + custom)
 STEP_DELAY = _env_float_opcional("FNAF_STEP_DELAY", 0.35)
 SIDE_SWITCH_DELAY = _env_float_opcional("FNAF_SIDE_SWITCH_DELAY", 0.85)
 CAMERA_EXIT_DELAY = _env_float_opcional("FNAF_CAMERA_EXIT_DELAY", 0.65)
@@ -218,7 +224,7 @@ class FNAFEnv(gym.Env):
             ),
             "estados": spaces.Box(
                 low=0, high=1,
-                shape=(10,),
+                shape=(11,),                 # +1 = noite (Decisão 7)
                 dtype=np.float32
             )
         })
@@ -260,6 +266,10 @@ class FNAFEnv(gym.Env):
         self._vazio_esq = 0
         self._vazio_dir = 0
         self._presenca_esq = 0
+        # Noite (Decisão 7) — rastreada internamente pelo desfecho do episódio anterior.
+        # NÃO é zerada no reset() (persiste entre episódios; só a transição abaixo a muda).
+        self.noite = 1
+        self._resultado_episodio = None   # "vitoria" | "morte" | None (interrompido/truncado)
 
     def _janela_do_jogo_aberta(self) -> bool:
         import pygetwindow as gw
@@ -481,6 +491,16 @@ class FNAFEnv(gym.Env):
         }
         return observacao, 0.0, True, False, info
 
+    def _transicao_noite(self) -> None:
+        """Atualiza self.noite pelo desfecho do episódio anterior (Decisão 7): a vitória SEMPRE
+        avança; a morte depende do método de reset (new_game → Noite 1; continue → mantém).
+        interrompido/truncado (resultado None) mantêm a noite. Testável offline."""
+        if self._resultado_episodio == "vitoria":
+            self.noite = min(self.noite + 1, MAX_NOITE)
+        elif self._resultado_episodio == "morte" and RESET_METODO == "new_game":
+            self.noite = 1
+        self._resultado_episodio = None
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
@@ -489,6 +509,8 @@ class FNAFEnv(gym.Env):
                 "FNAF_WINDOW_TITLE nao configurado no .env. "
                 "Configure as variaveis obrigatorias antes de executar."
             )
+
+        self._transicao_noite()   # atualiza self.noite pelo desfecho anterior (Decisão 7)
 
         self.passos           = 0
         self.energia          = 100.0
@@ -667,6 +689,10 @@ class FNAFEnv(gym.Env):
 
         if terminado or truncado:
             self._escrever_log_desyncs(morreu, sobreviveu)
+        # Registra o desfecho p/ a transição de noite no próximo reset (Decisão 7).
+        # truncado sem morte/vitória → None (mantém a noite).
+        if terminado:
+            self._resultado_episodio = "vitoria" if sobreviveu else "morte"
 
         info = {
             "passos":         self.passos,
@@ -683,6 +709,7 @@ class FNAFEnv(gym.Env):
             "acao_valida":    acao_valida,
             "acao_nome":      ACOES[acao],
             "bonus_hora":     self._total_bonus_hora,
+            "noite":          self.noite,
         }
 
         return observacao, recompensa, terminado, truncado, info
@@ -973,6 +1000,7 @@ class FNAFEnv(gym.Env):
             min(self.tempo_jogo / 535.0, 1.0),
             float(self.ameaca_esq),
             float(self.ameaca_dir),
+            float(self.noite) / MAX_NOITE,        # Decisão 7: dificuldade da noite
         ], dtype=np.float32)
 
         return {"imagem": frame, "estados": estados}

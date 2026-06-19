@@ -3,7 +3,7 @@ import os
 import re
 import sys
 
-from src.environment.fnaf_env import FNAFEnv
+from src.environment.fnaf_env import FNAFEnv, MAX_NOITE
 
 
 def encontrar_ultimo_modelo() -> str | None:
@@ -41,6 +41,7 @@ def modo_teste():
     print(f"  - Energia: {obs['estados'][6]*100:.1f}%")
     print(f"  - Ameaça esquerda: {obs['estados'][8]}")
     print(f"  - Ameaça direita: {obs['estados'][9]}")
+    print(f"  - Noite: {obs['estados'][10] * MAX_NOITE:.0f}")
     input("O jogo iniciou a noite 1? (aperta Enter para confirmar)")
     env.close()
 
@@ -70,7 +71,6 @@ def modo_jogar():
     a CNN não está contribuindo; se zerar os ESTADOS derrubar muito, a política depende deles.
     Compare a taxa de vitória + sobrevivência média vs. o run cheio (sem flag)."""
     import numpy as np
-    from stable_baselines3 import PPO
 
     ablacao = None
     if "--ablacao" in sys.argv:
@@ -85,14 +85,21 @@ def modo_jogar():
         print("Nenhum modelo encontrado em modelos/. Treine primeiro: python main.py treino")
         return
 
-    print(f"Carregando modelo: {caminho}")
+    # Decisão 7: FNAF_USAR_LSTM=1 carrega RecurrentPPO e propaga o estado da LSTM (igual ao treino).
+    usar_lstm = os.getenv("FNAF_USAR_LSTM", "0").strip() == "1"
+    print(f"Carregando modelo ({'LSTM' if usar_lstm else 'PPO'}): {caminho}")
     if ablacao:
         print(f">>> ABLAÇÃO (Decisão 5): ramo '{ablacao}' ZERADO na observação <<<")
     # Sem VecNormalize aqui de propósito: o treino normaliza só a recompensa
     # (norm_obs=False), então a política vê a observação crua igual no treino.
     # As stats de normalização só importam para retomar o treino, não para jogar.
     env = FNAFEnv()
-    modelo = PPO.load(caminho, env=env)
+    if usar_lstm:
+        from sb3_contrib import RecurrentPPO
+        modelo = RecurrentPPO.load(caminho, env=env)
+    else:
+        from stable_baselines3 import PPO
+        modelo = PPO.load(caminho, env=env)
 
     episodio = 0
     vitorias = 0
@@ -104,13 +111,20 @@ def modo_jogar():
             terminado = truncado = False
             recompensa_total = 0.0
             info = {}
+            lstm_states = None                          # estado da LSTM (Decisão 7)
+            ep_start = np.ones((1,), dtype=bool)        # sinaliza início → a LSTM zera o estado
 
             while not (terminado or truncado):
                 obs_pred = obs
                 if ablacao:                       # zera o ramo só para o predict (Decisão 5)
                     obs_pred = dict(obs)
                     obs_pred[ablacao] = np.zeros_like(obs[ablacao])
-                acao, _ = modelo.predict(obs_pred, deterministic=True)
+                if usar_lstm:
+                    acao, lstm_states = modelo.predict(
+                        obs_pred, state=lstm_states, episode_start=ep_start, deterministic=True)
+                    ep_start = np.zeros((1,), dtype=bool)
+                else:
+                    acao, _ = modelo.predict(obs_pred, deterministic=True)
                 obs, recompensa, terminado, truncado, info = env.step(int(acao))
                 recompensa_total += recompensa
 

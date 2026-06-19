@@ -615,6 +615,17 @@ ainda ruim): o agente "congela" numa política medíocre ou o crítico desestabi
 
 ## DECISÃO 7 — RecurrentPPO + LSTM sobre o extractor híbrido  ⟵ maior aposta, menos urgente
 
+> **STATUS: INFRAESTRUTURA PRONTA (falta o treino A/B).** Motivo decisivo (mais forte que a recomendação
+> genérica): **Foxy e Freddy não são detectáveis por frame** (Foxy é buildup de minutos; Freddy só nas
+> câmeras) → exigem memória de longo alcance, que **frame-stacking não cobre** → LSTM direto.
+> Implementado: `RecurrentPPO` (`MultiInputLstmPolicy`, 128/1 camada) reusando o `MultimodalExtractor`,
+> ligado por `FNAF_USAR_LSTM=1` (padrão 0 = feedforward, **controle do A/B**); `modo_jogar` propaga
+> `lstm_states`/`episode_starts`. **Noite no estado (10→11)** por rastreamento interno (vitória→+1;
+> morte→Noite 1 com `FNAF_RESET_METODO=new_game`). **Segurança/rastreabilidade:** `testar_masking`
+> (estado zera no episódio — passou), `sonda_memoria` (a recorrência usa memória?), doc de isolamento em
+> `REFERENCIA_HIPERPARAMETROS.md`. **Treino:** Run 1 controle (feedforward+noite+D6, = gate adiado das
+> D4/D6) → Run 2 LSTM, mesmo orçamento, com critério de desistência. Ver `docs/VALIDACAO_E_TESTES.md`.
+
 ### O problema
 
 O FNAF é fortemente *parcialmente observável* (o agente nunca vê o estado completo do jogo de uma

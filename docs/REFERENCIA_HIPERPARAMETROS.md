@@ -335,3 +335,31 @@ recurso escasso, 3-4 runs isolados sai caro). Por isso este guia: se o bundle **
   o treino todo (explora, não congela). Isso é proposital.
 - **Medir sempre por taxa de vitória / tempo de sobrevivência**, nunca pela recompensa (muda entre
   versões). Salvar o controle (`modelos/*.zip` + `vecnormalize.pkl`) **antes** de treinar.
+
+---
+
+## Decisão 7 — RecurrentPPO (LSTM): por que e como diagnosticar
+
+**Por que LSTM (não frame-stacking):** Foxy/Freddy **não são detectáveis por frame** (Foxy é um
+*buildup* de minutos; Freddy só aparece nas câmeras). Lidar com eles exige memória de **longo
+alcance** — frame-stacking (poucos frames) não cobre. A noite entra no estado p/ condicionar a
+agressividade (a LSTM aprende "noite 4 = Foxy mais rápido"). Ligar com `FNAF_USAR_LSTM=1`.
+
+**Começa pequena:** `lstm_hidden_size=128`, `n_lstm_layers=1`. Memória maior = mais parâmetros =
+mais amostra; só cresça se ajudar. **A/B contra o controle** (feedforward, `FNAF_USAR_LSTM=0`),
+mudando SÓ o algoritmo, com **critério de desistência** (se em ~100k steps não empatar a
+sobrevivência do controle → reverter).
+
+**Mapa sintoma → o que fazer:**
+
+| sintoma | causa provável | o que fazer |
+|---|---|---|
+| `approx_kl` explode / `clip_fraction` alto / loss diverge (tensorboard) | sequência muito correlacionada / LR alto p/ recorrência | baixar LR, reduzir `n_epochs`, `lstm_hidden_size` menor |
+| `value_loss` diverge | crítico recorrente instável | `enable_critic_lstm` menor impacto: testar crítico não-recorrente; reduzir LSTM |
+| `sonda_memoria` diz **INERTE** (ação não muda com o histórico) | a recorrência não está sendo usada (vira feedforward caro) | conferir o masking (`testar_masking`); mais amostra; rever se a tarefa exige memória |
+| `testar_masking` FALHA (estado vaza) | `episode_starts` não propagado | bug no caminho de treino/avaliação — corrigir antes de qualquer run longo |
+| LSTM **não empata** o controle no orçamento | recorrência custando mais amostra do que rende | desistir (reverter pro feedforward) — frame-stacking não resolveria Foxy/Freddy de qualquer forma |
+
+**Avaliação (`jogar`) precisa propagar o estado:** `FNAF_USAR_LSTM=1` faz o `modo_jogar` carregar
+RecurrentPPO e propagar `lstm_states`/`episode_starts` (resetando no início de cada episódio). Sem
+isso a avaliação mente.

@@ -23,7 +23,7 @@ class MultimodalExtractor(BaseFeaturesExtractor):
             cnn_output_dim = self.cnn(sample_img).shape[1]
 
         self.fc_estados = nn.Sequential(
-            nn.Linear(10, 32),
+            nn.Linear(11, 32),   # 11 estados (Decisão 7: +noite)
             nn.ReLU(),
         )
 

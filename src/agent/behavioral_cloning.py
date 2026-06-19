@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from stable_baselines3 import PPO
-from src.environment.fnaf_env import FNAFEnv
+from src.environment.fnaf_env import FNAFEnv, MAX_NOITE
 from src.agent.multimodal_policy import MultimodalExtractor
 from pathlib import Path
 from collections import Counter
@@ -68,6 +68,7 @@ class GameplayDataset(Dataset):
             min(float(dado.get("tempo_ep", 0)) / 535.0, 1.0),
             float(dado.get("ameaca_esq", 0)),
             float(dado.get("ameaca_dir", 0)),
+            float(dado.get("noite", 1)) / MAX_NOITE,   # Decisão 7; datasets antigos → noite 1
         ], dtype=np.float32)
 
         acao = int(dado["acao"])

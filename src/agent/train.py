@@ -4,6 +4,7 @@ import time
 from collections import deque
 import keyboard
 from stable_baselines3 import PPO
+from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from src.environment.fnaf_env import FNAFEnv, GAMMA
@@ -39,6 +40,10 @@ def _carregar_env(caminho: str = ".env") -> None:
             os.environ.setdefault(chave, valor)
 
 _carregar_env()
+
+# Decisão 7 — ligar a LSTM (RecurrentPPO) via FNAF_USAR_LSTM=1 no .env. Padrão 0 = feedforward
+# (PPO), que é o CONTROLE do A/B. Trocar SÓ isso entre o controle e a LSTM.
+USAR_LSTM = os.getenv("FNAF_USAR_LSTM", "0").strip() == "1"
 
 
 def _env_str_obrigatorio(nome: str) -> str:
@@ -147,6 +152,7 @@ class LogCallback(BaseCallback):
             linha = (
                 f"{_env_str_obrigatorio('PC')} | "
                 f"Ep {self.episodio:4d} | "
+                f"Noite {info.get('noite', 1)} | "
                 f"{resultado:8s} | "
                 f"Passos: {info.get('passos', 0):6d} | "
                 f"Tempo: {tempo_ep_minutos:7.2f} min | "
@@ -231,16 +237,21 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     else:
         env = VecNormalize(env_base, norm_obs=False, norm_reward=True, gamma=GAMMA)
 
+    # Decisão 7 — memória: USAR_LSTM troca PPO (feedforward, controle do A/B) por RecurrentPPO
+    # (LSTM, reusando o MultimodalExtractor). Só o ALGORITMO muda — recompensa/VecNormalize/gamma/
+    # noite/schedules iguais ao controle. Ligar via FNAF_USAR_LSTM=1 no .env.
+    Modelo   = RecurrentPPO if USAR_LSTM else PPO
+    politica = "MultiInputLstmPolicy" if USAR_LSTM else "MultiInputPolicy"
     if carregar_modelo and os.path.exists(carregar_modelo):
-        print(f"Carregando modelo: {carregar_modelo}")
-        modelo = PPO.load(carregar_modelo, env=env)
+        print(f"Carregando modelo ({'LSTM' if USAR_LSTM else 'PPO'}): {carregar_modelo}")
+        modelo = Modelo.load(carregar_modelo, env=env)
     else:
-        print("Criando novo modelo PPO...")
-        policy_kwargs = dict(
-            features_extractor_class=MultimodalExtractor,
-        )
-        modelo = PPO(
-            policy="MultiInputPolicy",
+        print(f"Criando novo modelo {'RecurrentPPO (LSTM)' if USAR_LSTM else 'PPO'}...")
+        policy_kwargs = dict(features_extractor_class=MultimodalExtractor)
+        if USAR_LSTM:                          # LSTM pequena (Decisão 7): menos amostra/instabilidade
+            policy_kwargs.update(lstm_hidden_size=128, n_lstm_layers=1, enable_critic_lstm=True)
+        modelo = Modelo(
+            policy=politica,
             env=env,
             policy_kwargs=policy_kwargs,
             learning_rate=linear(3e-4, 3e-5),  # Decisão 6: decai 3e-4 → 3e-5 (piso p/ retomada)
