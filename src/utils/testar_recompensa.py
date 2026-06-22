@@ -1,12 +1,19 @@
-"""Teste offline da funcao de recompensa (Decisao 2).
+"""Teste offline da funcao de recompensa (Decisao 2) — redesenho NAO-PRESCRITIVO.
 
-Valida o incentivo de _calcular_recompensa sem subir o jogo: a funcao so le
-estado abstrato (energia, portas, tempo, contadores), nunca pixels.
+Valida o incentivo de _calcular_recompensa + o shaping potential-based sem subir o jogo:
+a funcao so le estado abstrato (energia, portas, tempo, contadores), nunca pixels.
+
+Os invariantes guardam o redesenho contra regressoes (especialmente o vicio de acampar
+na camera): sinal denso por TEMPO REAL (nao por nro de steps), orcamento << vitoria, e
+toda "dica de jogo" so via Phi (telescopa, nao move o otimo).
 
 Rodar: python -m src.utils.testar_recompensa
 """
 
-from src.environment.fnaf_env import FNAFEnv, ACOES, CHECKPOINTS_NOITE, GAMMA
+from src.environment.fnaf_env import (
+    FNAFEnv, ACOES, CHECKPOINTS_NOITE, GAMMA,
+    RECOMPENSA_NOITE, BONUS_MARCO_HORA, FOXY_PACIENCIA,
+)
 
 NOME_PARA_ACAO = {nome: i for i, nome in ACOES.items()}
 
@@ -18,6 +25,7 @@ def _novo_env() -> FNAFEnv:
     env = FNAFEnv.__new__(FNAFEnv)
     env.energia = 100.0
     env.tempo_jogo = 0.0
+    env._dt_step = PASSO_DT
     env.porta_esq = False
     env.porta_dir = False
     env.luz_esq = False
@@ -34,19 +42,17 @@ def _novo_env() -> FNAFEnv:
 
 
 def recompensa_snapshot(*, energia=70.0, tempo=200.0, porta_esq=False, porta_dir=False,
-                        penultima_acao=None, contador_nada=0, passos_sem_camera=0,
-                        acao="nada", morreu=False, sobreviveu=False, acao_valida=True,
-                        com_bonus=False) -> float:
+                        passos_sem_camera=0, dt=PASSO_DT, acao="nada", morreu=False,
+                        sobreviveu=False, acao_valida=True, com_bonus=False) -> float:
     # Por padrao suprime o bonus_hora (pre-marca os checkpoints) para isolar o step.
     env = _novo_env()
     if not com_bonus:
         env._horas_bonificadas = {t for t, _ in CHECKPOINTS_NOITE}
     env.energia = energia
     env.tempo_jogo = tempo
+    env._dt_step = dt
     env.porta_esq = porta_esq
     env.porta_dir = porta_dir
-    env.penultima_acao = penultima_acao
-    env.contador_nada = contador_nada
     env.passos_sem_camera = passos_sem_camera
     return env._calcular_recompensa(morreu, sobreviveu, NOME_PARA_ACAO[acao], acao_valida)
 
@@ -55,13 +61,19 @@ def recompensa_snapshot(*, energia=70.0, tempo=200.0, porta_esq=False, porta_dir
 VITORIA = recompensa_snapshot(sobreviveu=True)
 
 
-def simular(roteiro, *, morre_no_fim=False, sobrevive_no_fim=False) -> float:
-    # Roda o roteiro pela recompensa real com transicao de estado aproximada.
-    # Os numeros absolutos nao sao exatos; os testes so comparam rankings.
+def simular(roteiro, *, dt=PASSO_DT, morre_no_fim=False, sobrevive_no_fim=False,
+            ameaca_esq=False, ameaca_dir=False, com_shaping=False) -> float:
+    # Roda o roteiro pela recompensa real com transicao de estado aproximada. Com
+    # com_shaping=True soma tambem o potential-based (gamma*Phi'-Phi), como step() faz.
+    # As ameacas (se passadas) ficam fixas no episodio (o teste injeta o cenario).
     env = _novo_env()
+    env._dt_step = dt
+    env.ameaca_esq = ameaca_esq
+    env.ameaca_dir = ameaca_dir
     cd_porta_esq = cd_porta_dir = cd_camera = 0
     prev_acao = None
     retorno = 0.0
+    phi_antes = env._potencial_seguranca() if com_shaping else 0.0
 
     for i, nome in enumerate(roteiro):
         env.penultima_acao = prev_acao
@@ -92,13 +104,18 @@ def simular(roteiro, *, morre_no_fim=False, sobrevive_no_fim=False) -> float:
 
         env.passos_sem_camera = 0 if env.camera_aberta else env.passos_sem_camera + 1
 
-        env.tempo_jogo += PASSO_DT
+        env.tempo_jogo += dt
         itens = min(int(env.porta_esq) + int(env.porta_dir) + int(env.camera_aberta), 3)
-        env.energia = max(0.0, env.energia - (0.104 + itens * 0.100) * PASSO_DT)
+        env.energia = max(0.0, env.energia - (0.104 + itens * 0.100) * dt)
 
         morreu = morre_no_fim and i == len(roteiro) - 1
         sobreviveu = sobrevive_no_fim and i == len(roteiro) - 1
-        retorno += env._calcular_recompensa(morreu, sobreviveu, NOME_PARA_ACAO[nome], acao_valida)
+        r = env._calcular_recompensa(morreu, sobreviveu, NOME_PARA_ACAO[nome], acao_valida)
+        if com_shaping:
+            phi_depois = 0.0 if (morreu or sobreviveu) else env._potencial_seguranca()
+            r += GAMMA * phi_depois - phi_antes
+            phi_antes = phi_depois
+        retorno += r
 
         cd_porta_esq = max(0, cd_porta_esq - 1)
         cd_porta_dir = max(0, cd_porta_dir - 1)
@@ -109,125 +126,132 @@ def simular(roteiro, *, morre_no_fim=False, sobrevive_no_fim=False) -> float:
 
 
 def bonus_hora_maximo() -> float:
-    # Bonus_hora maximo possivel num episodio (energia cheia em todo checkpoint).
+    # Bonus_hora maximo possivel num episodio (todos os marcos de hora alcancados).
     env = _novo_env()
-    env.energia = 100.0
     for t_cp, _ in CHECKPOINTS_NOITE[1:]:
         env.tempo_jogo = t_cp
         env._calcular_recompensa(False, False, NOME_PARA_ACAO["nada"], True)
     return env._total_bonus_hora
 
 
-def _roteiro_proposito(n: int):
-    ciclo = ["abrir_fechar_camera", "camera_1a", "abrir_fechar_camera",
-             "porta_direita", "nada", "porta_direita", "nada", "nada"]
-    return [ciclo[i % len(ciclo)] for i in range(n)]
-
-
-def _roteiro_spam(n: int):
-    return ["luz_esquerda"] * n
-
-
-# Invariantes estaveis (verdes hoje; nao podem quebrar num rebalanceamento)
-def test_terminais_ordenados():
-    vivo_bom = recompensa_snapshot(acao="porta_direita", porta_dir=True)
-    vivo_ruim = recompensa_snapshot(acao="nada", contador_nada=40)
-    vitoria = recompensa_snapshot(sobreviveu=True)
-    morte = recompensa_snapshot(morreu=True)
-    assert vitoria > vivo_bom > morte
-    assert vitoria > vivo_ruim > morte
-
-
-def test_proposito_supera_passividade():
-    bom = recompensa_snapshot(acao="porta_direita", porta_dir=True, energia=70)
-    passivo = recompensa_snapshot(acao="nada", contador_nada=40, energia=70)
-    assert bom > passivo
-
-
-def test_repetir_nao_compensa():
-    assert (recompensa_snapshot(acao="camera_1a", penultima_acao="camera_1a")
-            <= recompensa_snapshot(acao="camera_1a", penultima_acao=None))
-    assert (recompensa_snapshot(acao="luz_direita", penultima_acao="luz_direita")
-            <= recompensa_snapshot(acao="luz_direita", penultima_acao=None))
-
-
-def test_ambas_portas_nao_compensa():
-    duas = recompensa_snapshot(acao="nada", porta_esq=True, porta_dir=True)
-    uma = recompensa_snapshot(acao="nada", porta_esq=False, porta_dir=True)
-    assert duas <= uma
-
-
-def test_vencer_supera_quase_vencer():
-    venceu = simular(_roteiro_proposito(120), sobrevive_no_fim=True)
-    quase = simular(_roteiro_proposito(120), morre_no_fim=True)
-    assert venceu > quase
-
-
-def test_spam_nao_supera_proposito():
-    proposito = simular(_roteiro_proposito(120), morre_no_fim=True)
-    spam = simular(_roteiro_spam(120), morre_no_fim=True)
-    assert spam <= proposito
-
-
-# Alvos da Decisao 1 (vermelhos antes do rebalanceamento, verdes depois)
-def test_alvo_d1_penalidade_nao_afoga_base():
-    base = recompensa_snapshot(acao="camera_1a", penultima_acao=None, energia=70)
-    com_penalidade = recompensa_snapshot(acao="camera_1a", penultima_acao="camera_1a", energia=70)
-    assert base > 0
-    assert com_penalidade >= 0
-
-
-def test_alvo_d1_bonus_nao_rivaliza_vitoria():
-    assert bonus_hora_maximo() < 0.5 * VITORIA
-
-
-# Shaping potential-based (Decisao 4, Opcao B) — testa o potencial e o telescoping.
-def _phi(*, ameaca_esq=False, porta_esq=False, ameaca_dir=False, porta_dir=False) -> float:
+def _phi(*, ameaca_esq=False, porta_esq=False, ameaca_dir=False, porta_dir=False,
+         passos_sem_camera=0) -> float:
     env = _novo_env()
     env.ameaca_esq, env.porta_esq = ameaca_esq, porta_esq
     env.ameaca_dir, env.porta_dir = ameaca_dir, porta_dir
+    env.passos_sem_camera = passos_sem_camera
     return env._potencial_seguranca()
 
 
+# ── Objetivo: o terminal e que separa jogar bem de mal (nao ha bonus por acao) ──────────
+def test_terminais_ordenados():
+    vivo = recompensa_snapshot(acao="porta_direita", porta_dir=True)
+    vitoria = recompensa_snapshot(sobreviveu=True)
+    morte = recompensa_snapshot(morreu=True)
+    assert vitoria > vivo > morte
+
+
+def test_vencer_supera_quase_vencer():
+    venceu = simular(["nada"] * 120, sobrevive_no_fim=True)
+    quase = simular(["nada"] * 120, morre_no_fim=True)
+    assert venceu > quase
+
+
+def test_vitoria_domina_sobrevivencia():
+    # Todo o sinal denso de uma noite (sobrevivencia + marcos) << vitoria: vencer pesa mais
+    # que so durar. E o conserto direto do "sobreviver acampando rivaliza com vencer".
+    denso_max = RECOMPENSA_NOITE + BONUS_MARCO_HORA * (len(CHECKPOINTS_NOITE) - 1)
+    assert denso_max < 0.5 * VITORIA
+
+
+# ── Anti-vicio: denso por TEMPO REAL, nao por nro de steps ──────────────────────────────
+def test_sobreviver_mais_rende_mais():
+    curto = simular(["nada"] * 50)
+    longo = simular(["nada"] * 150)
+    assert longo > curto
+
+
+def test_densa_independe_de_steps():
+    # Mesma duracao de relogio (70s), nro de steps diferente: a recompensa densa NAO pode
+    # pagar mais por spammar acoes rapidas (era um vetor do vicio de camera/spam).
+    poucos = simular(["nada"] * 100, dt=0.70)   # 70s
+    muitos = simular(["nada"] * 200, dt=0.35)   # 70s
+    assert abs(muitos - poucos) < 0.01 * RECOMPENSA_NOITE
+
+
+def test_acao_sem_efeito_penaliza():
+    valida = recompensa_snapshot(acao="camera_1a", acao_valida=True)
+    invalida = recompensa_snapshot(acao="camera_1a", acao_valida=False)
+    assert invalida < valida
+
+
+def test_marcos_nao_rivalizam_vitoria():
+    assert bonus_hora_maximo() < 0.5 * VITORIA
+
+
+# ── Shaping potential-based (Phi): ameaca + risco do Foxy, telescopa ─────────────────────
 def test_phi_bloqueio_supera_exposto():
-    # Ameaca presente: porta fechada (bloqueado) deve ser mais seguro que aberta (exposto).
     bloqueado = _phi(ameaca_esq=True, porta_esq=True)
     exposto = _phi(ameaca_esq=True, porta_esq=False)
     assert bloqueado > exposto
 
 
 def test_phi_sem_ameaca_eh_zero():
-    # Sem ameaca, fechar porta nao da seguranca (Phi=0) — evita premiar fechar a toa.
+    # Sem ameaca e com camera fresca, fechar porta nao da seguranca (Phi=0).
     assert _phi(ameaca_esq=False, porta_esq=True, ameaca_dir=False, porta_dir=True) == 0.0
 
 
-def test_shaping_nao_acumula_no_episodio():
-    # Soma do shaping (gamma*Phi' - Phi) num episodio que comeca e termina seguro (Phi=0)
-    # telescopa para ~0 (residuo so do desconto) — nao domina o objetivo verdadeiro.
-    phis = [0.0, 0.5, 0.5, 0.0, 0.0, 0.5, 0.0]  # expoe -> fecha na ameaca -> ameaca sai...
+def test_phi_foxy_reduz_seguranca():
+    sem = _phi(passos_sem_camera=0)
+    negligenciado = _phi(passos_sem_camera=FOXY_PACIENCIA * 2)
+    assert negligenciado < sem
+
+
+def test_phi_foxy_tolera_ate_paciencia():
+    # Ate a paciencia, o risco do Foxy e 0 — sem empurrao para a camera no caso comum
+    # (e o oposto da antiga penalidade unilateral, que so punia NAO-checar).
+    assert _phi(passos_sem_camera=FOXY_PACIENCIA) == _phi(passos_sem_camera=0)
+
+
+def test_shaping_telescopa():
+    # Soma do shaping (gamma*Phi'-Phi) num episodio que comeca e termina seguro (Phi=0)
+    # fica ~0 (residuo so do desconto) — nao domina o objetivo verdadeiro.
+    phis = [0.0, 0.5, 0.5, 0.0, -0.5, 0.0, 0.0]
     soma = sum(GAMMA * phis[i + 1] - phis[i] for i in range(len(phis) - 1))
     assert abs(soma) < 0.05
 
 
-SHAPING_D4 = [
+def test_acampar_na_ameaca_nao_supera_lidar():
+    # Ameaca presente o tempo todo. "Lidar": fecha a porta e sobrevive (o jogo nao mata).
+    # "Acampar": fica na camera, ameaca exposta (nao da p/ fechar porta na camera) e morre.
+    # Com terminal + shaping, lidar tem de render bem mais — guarda contra o vicio de camera.
+    lidar = simular(["porta_esquerda"] + ["nada"] * 59, ameaca_esq=True,
+                    sobrevive_no_fim=True, com_shaping=True)
+    acampar = simular(["abrir_fechar_camera"] + ["camera_1a"] * 59, ameaca_esq=True,
+                      morre_no_fim=True, com_shaping=True)
+    assert lidar > acampar
+
+
+OBJETIVO = [
+    test_terminais_ordenados,
+    test_vencer_supera_quase_vencer,
+    test_vitoria_domina_sobrevivencia,
+    test_marcos_nao_rivalizam_vitoria,
+]
+
+ANTI_VICIO = [
+    test_sobreviver_mais_rende_mais,
+    test_densa_independe_de_steps,
+    test_acao_sem_efeito_penaliza,
+    test_acampar_na_ameaca_nao_supera_lidar,
+]
+
+SHAPING = [
     test_phi_bloqueio_supera_exposto,
     test_phi_sem_ameaca_eh_zero,
-    test_shaping_nao_acumula_no_episodio,
-]
-
-
-ESTAVEIS = [
-    test_terminais_ordenados,
-    test_proposito_supera_passividade,
-    test_repetir_nao_compensa,
-    test_ambas_portas_nao_compensa,
-    test_vencer_supera_quase_vencer,
-    test_spam_nao_supera_proposito,
-]
-
-ALVOS_D1 = [
-    test_alvo_d1_penalidade_nao_afoga_base,
-    test_alvo_d1_bonus_nao_rivaliza_vitoria,
+    test_phi_foxy_reduz_seguranca,
+    test_phi_foxy_tolera_ate_paciencia,
+    test_shaping_telescopa,
 ]
 
 
@@ -248,18 +272,20 @@ def _rodar(grupo):
 def main() -> int:
     print(f"bonus_hora maximo: {bonus_hora_maximo():.1f}  (vitoria = {VITORIA:.0f})\n")
 
-    print("Invariantes estaveis:")
-    ok_estaveis = _rodar(ESTAVEIS)
+    print("Objetivo (terminal manda):")
+    ok_obj = _rodar(OBJETIVO)
 
-    print("\nAlvos da Decisao 1:")
-    ok_alvos = _rodar(ALVOS_D1)
+    print("\nAnti-vicio (denso por tempo, nao por steps):")
+    ok_anti = _rodar(ANTI_VICIO)
 
-    print("\nShaping potential-based (Decisao 4):")
-    ok_shaping = _rodar(SHAPING_D4)
+    print("\nShaping potential-based (Phi):")
+    ok_shaping = _rodar(SHAPING)
 
-    print(f"\nEstaveis: {ok_estaveis}/{len(ESTAVEIS)}   Alvos D1: {ok_alvos}/{len(ALVOS_D1)}"
-          f"   Shaping D4: {ok_shaping}/{len(SHAPING_D4)}")
-    return 0 if ok_estaveis == len(ESTAVEIS) and ok_shaping == len(SHAPING_D4) else 1
+    total_ok = ok_obj + ok_anti + ok_shaping
+    total = len(OBJETIVO) + len(ANTI_VICIO) + len(SHAPING)
+    print(f"\nObjetivo: {ok_obj}/{len(OBJETIVO)}   Anti-vicio: {ok_anti}/{len(ANTI_VICIO)}"
+          f"   Shaping: {ok_shaping}/{len(SHAPING)}   TOTAL: {total_ok}/{total}")
+    return 0 if total_ok == total else 1
 
 
 if __name__ == "__main__":

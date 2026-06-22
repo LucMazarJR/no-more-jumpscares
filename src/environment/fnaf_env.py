@@ -204,6 +204,20 @@ CHECKPOINTS_NOITE = [
     (535,   5.0),   # 6AM
 ]
 
+# ── Recompensa (redesenho NÃO-PRESCRITIVO) ────────────────────────────────────────────
+# Princípio: premiar o OBJETIVO e os recursos reais do jogo, nunca ações específicas. Toda
+# dica de COMO jogar entra por shaping potential-based (γ·Φ'−Φ, telescopa → NÃO move o ótimo,
+# Ng/Harada/Russell 1999), nunca por bônus/penalidade por ação — que vicia e cria ótimos
+# degenerados (ex.: acampar 100% na câmera). O sinal denso é SOBREVIVÊNCIA POR TEMPO REAL
+# (não por nº de steps: pagar por step premia spammar ação rápida) e o orçamento total da
+# noite fica << vitória, então VENCER domina "só durar".
+DURACAO_NOITE         = 535.0  # ~6h em segundos reais (último checkpoint) — base do progresso
+RECOMPENSA_NOITE      = 60.0   # orçamento denso de uma noite inteira (Σ ≈ 60 << vitória 500)
+BONUS_MARCO_HORA      = 3.0    # marco por hora alcançada (flat, SEM peso de energia): 6×3 = 18
+PESO_AMEACA_BLOQUEADA = 0.5    # Φ: +0.5 por lado com ameaça PRESENTE e porta FECHADA
+PESO_FOXY             = 0.5    # Φ: penaliza câmera negligenciada (proxy do Foxy), só após PACIENCIA
+FOXY_PACIENCIA        = 20     # steps sem câmera tolerados antes de o risco do Foxy subir no Φ
+
 
 class FNAFEnv(gym.Env):
     metadata = {"render_modes": ["human"]}
@@ -247,6 +261,7 @@ class FNAFEnv(gym.Env):
         self.contador_nada = 0
         self.episode_start_time = None
         self._t_ultima_energia = None
+        self._dt_step                 = 0.7  # Δt do step (recalculado em _atualizar_energia)
         self.passos_sem_camera        = 0
         self._botao_luz_pressionado   = None
         self.cooldown_porta_esq       = 0  # só bloqueia porta (animação ~0.6s)
@@ -870,6 +885,7 @@ class FNAFEnv(gym.Env):
         agora = time.perf_counter()
         delta = agora - (self._t_ultima_energia or agora)
         self._t_ultima_energia = agora
+        self._dt_step = delta   # Δt de relógio do step — base do sinal denso de sobrevivência
 
         itens_ativos = (int(self.porta_esq) + int(self.porta_dir)
                         + int(self.luz_esq) + int(self.luz_dir)
@@ -897,82 +913,64 @@ class FNAFEnv(gym.Env):
         return 5.0
 
     def _potencial_seguranca(self) -> float:
-        """Φ(estado) do shaping potential-based (Decisão 4, Opção B): mede quão segura
-        é a situação AGORA. +0.5 por lado com ameaça PRESENTE e porta FECHADA (bloqueada);
-        0 se a ameaça está exposta (porta aberta) ou não há ameaça. O shaping recompensa
-        só a variação γ·Φ(depois)−Φ(antes), que telescopa ao longo do episódio e por isso
-        NÃO move o ótimo (Ng, Harada & Russell 1999) — só faz o crédito chegar mais cedo,
-        perto da ação de fechar a porta na ameaça."""
+        """Φ(estado) do shaping potential-based (Ng, Harada & Russell 1999): o treino recompensa
+        só a variação γ·Φ(depois)−Φ(antes) (somada em step()), que telescopa ao longo do episódio
+        e por isso NÃO move o ótimo — guia SEM prescrever a jogada, só faz o crédito chegar cedo.
+        Φ mede "quão segura é a situação AGORA":
+          • +PESO_AMEACA_BLOQUEADA por lado com ameaça PRESENTE e porta FECHADA (lidou com ela);
+            0 se exposta (porta aberta) ou sem ameaça — não premia fechar porta à toa.
+          • −PESO_FOXY conforme a câmera é negligenciada ALÉM de FOXY_PACIENCIA (proxy do Foxy, que
+            corre quanto menos se olha as câmeras). Por ser potential-based, checar a câmera sobe Φ
+            e negligenciar baixa, e isso telescopa: NÃO há ganho líquido em acampar (≠ da antiga
+            penalidade unilateral, que só punia NÃO-checar → viciava em ficar na câmera). Abaixo da
+            paciência o termo é 0, então não há empurrão para a câmera no caso comum.
+        Φ=0 no terminal (forçado em step())."""
         phi = 0.0
         if self.ameaca_esq and self.porta_esq:
-            phi += 0.5
+            phi += PESO_AMEACA_BLOQUEADA
         if self.ameaca_dir and self.porta_dir:
-            phi += 0.5
+            phi += PESO_AMEACA_BLOQUEADA
+        excesso_sem_camera = max(0, self.passos_sem_camera - FOXY_PACIENCIA)
+        risco_foxy = min(excesso_sem_camera / FOXY_PACIENCIA, 1.0)
+        phi -= PESO_FOXY * risco_foxy
         return phi
 
     def _calcular_recompensa(self, morreu: bool, sobreviveu: bool, acao: int, acao_valida: bool) -> float:
-        # Magnitudes terminais moderadas: valores extremos (−500/+1000) dominavam
-        # a função de valor e criavam alvos com variância enorme em relação às
-        # recompensas por step (~0.5), dificultando a convergência do crítico.
-        # O retorno continua monotônico no tempo de sobrevivência.
+        # ── Objetivo verdadeiro (terminal) ────────────────────────────────────────
+        # Magnitudes moderadas p/ o crítico não explodir. É AQUI que "jogar bem" se separa
+        # de "jogar mal": vencer >> morrer. O shaping (γ·Φ'−Φ, somado em step(), fora daqui)
+        # só acelera o aprendizado SEM mover este ótimo — por isso não há bônus por ação.
         if morreu:
             return -100.0
-
         if sobreviveu:
             return +500.0
 
-        # Bônus por checkpoint de hora — tempo_jogo agora é o tempo real do episódio
-        tempo_ep = self.tempo_jogo
+        # ── Sinal denso = SOBREVIVÊNCIA POR TEMPO REAL (não por nº de steps) ──────────
+        # Pagar por step fixo num env de tempo real (step de duração variável) paga MAIS
+        # quem spamma ações rápidas/baratas — foi um dos vetores do vício de câmera. Atrelar
+        # ao relógio (Δt) faz 10s sobrevividos valerem o mesmo, seja qual for a ação tomada.
+        # O total da noite (RECOMPENSA_NOITE ≈ 60) fica << vitória (500), então VENCER domina
+        # "só durar" (antes o denso somava ~525 e rivalizava a vitória — durar acampado pagava
+        # quase tanto quanto vencer).
+        dt = getattr(self, "_dt_step", 0.7)
+        recompensa = (dt / DURACAO_NOITE) * RECOMPENSA_NOITE
+
+        # Marco por hora alcançada — densifica o OBJETIVO (sobreviver), não a estratégia: é
+        # FLAT (sem peso de energia, que seria dizer "conserve"). Gerência de energia emerge
+        # do terminal (ficar sem energia → Freddy → morte), não de um alvo de energia cravado.
         bonus_hora = 0.0
-        for t_cp, e_cp in CHECKPOINTS_NOITE[1:]:
-            if t_cp not in self._horas_bonificadas and tempo_ep >= t_cp:
+        for t_cp, _ in CHECKPOINTS_NOITE[1:]:
+            if t_cp not in self._horas_bonificadas and self.tempo_jogo >= t_cp:
                 self._horas_bonificadas.add(t_cp)
-                ratio = min(self.energia / e_cp, 1.5) if e_cp > 0 else (1.0 if self.energia > 0 else 0.0)
-                bonus_hora += max(ratio * 8.0, 1.0)  # 1 a 12
+                bonus_hora += BONUS_MARCO_HORA
         self._total_bonus_hora += bonus_hora
+        recompensa += bonus_hora
 
+        # Ação SEM EFEITO (câmera trocada com a tablet fechada, porta em cooldown, porta/luz
+        # durante a câmera): sinal FIEL de "isso não fez nada" — não prescreve COMO jogar, só
+        # remove o ruído de ações impossíveis. Pequeno e simétrico.
         if not acao_valida:
-            return -0.5 + bonus_hora
-
-        # Base de sobrevivência: cada step vivo vale mais do que morrer cedo
-        recompensa = bonus_hora + 0.5
-
-        # Bônus por progresso no tempo (incentiva sobreviver mais)
-        progresso = self.tempo_jogo / 535.0
-        recompensa += progresso * 0.5  # até +0.5 adicional no final da noite
-
-        nome_acao = ACOES[acao]
-
-        # Penalidade por ação repetida (verifica se é igual à ação do step anterior)
-        if nome_acao in ["porta_esquerda", "porta_direita", "luz_esquerda", "luz_direita"]:
-            if nome_acao == self.penultima_acao:
-                recompensa -= 0.15  # ~1/3 da base; desencoraja sem dominar
-        elif nome_acao == "nada":
-            # Permite descanso até 8 steps (~2s); penaliza inação prolongada
-            if self.contador_nada > 8:
-                recompensa -= min((self.contador_nada - 8) * 0.05, 0.5)
-        elif nome_acao == self.penultima_acao:
-            # Câmera ou toggle repetidos: penaliza só quando realmente repetido
             recompensa -= 0.1
-
-        # Pequena penalidade por usar luzes (gasta energia sem observar)
-        if nome_acao in ["luz_esquerda", "luz_direita"]:
-            recompensa -= 0.05
-
-        # Penalidade por ter ambas as portas fechadas (raramente necessário)
-        if self.porta_esq and self.porta_dir:
-            recompensa -= 0.1
-
-        # Penalidade por inatividade da câmera — Foxy corre a cada ~5s sem câmera
-        if self.passos_sem_camera > 20:
-            excesso = self.passos_sem_camera - 20
-            recompensa -= min(excesso * 0.02, 0.3)
-
-        # Penalidade por energia abaixo do esperado para o momento da noite
-        deficit = max(0.0, self._energia_esperada() - self.energia)
-        recompensa -= deficit * 0.02
-
-        recompensa = max(recompensa, -1.0)
 
         return recompensa
 
@@ -1177,7 +1175,14 @@ class FNAFEnv(gym.Env):
         acumula através do flicker (antes a estática zerava e a confirmação nunca fechava).
 
         Chica (direita): aparece na janela com porta aberta OU fechada → rosto, só com a
-        luz direita acesa; some após DEBOUNCE_VAZIO leituras vazias."""
+        luz direita acesa; some após DEBOUNCE_VAZIO leituras vazias.
+
+        Com a CÂMERA ABERTA o frame é o MAPA da câmera, não o escritório — ler ameaça dali é
+        ruído (limpa/seta errado) e tornava acampar na câmera falsamente "seguro" (Φ zerava a
+        ameaça). Então segura o último estado derivado do escritório: a ameaça não some só
+        porque o jogador ergueu a tablet, igual ao jogo real."""
+        if self.camera_aberta:
+            return
         # Bonnie (esquerda) — estado HELD, sem gate de luz (o "vazio confirmado" e o "rosto"
         # já exigem luz acesa; no escuro nada confirma e o estado se mantém).
         if self._sombra_no_vao(frame_cinza, "esquerdo") > LIMIAR_VAZIO:    # vazio confirmado
