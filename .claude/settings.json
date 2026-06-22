@@ -36,10 +36,14 @@
       "Bash(venv/Scripts/python.exe -c \"import stable_baselines3; print\\('SB3', stable_baselines3.__version__\\)\")",
       "Bash(rm -f debug/_noite_*.png && echo \"temporarios limpos\")",
       "Bash(venv/Scripts/python.exe -m pip install \"sb3-contrib==2.8.0\")",
-      "Bash(venv/Scripts/python.exe -c \"from sb3_contrib import RecurrentPPO; from sb3_contrib.ppo_recurrent.policies import MultiInputLstmPolicy; print\\('RecurrentPPO + MultiInputLstmPolicy OK'\\)\")"
+      "Bash(venv/Scripts/python.exe -c \"from sb3_contrib import RecurrentPPO; from sb3_contrib.ppo_recurrent.policies import MultiInputLstmPolicy; print\\('RecurrentPPO + MultiInputLstmPolicy OK'\\)\")",
+      "Bash(venv/Scripts/python.exe -c \"import numpy,torch,stable_baselines3,sb3_contrib,gymnasium,cv2; print\\('imports OK | torch', torch.__version__, '| cuda', torch.cuda.is_available\\(\\)\\)\")",
+      "Bash(cat)",
+      "Bash(venv/Scripts/python.exe -c \"import json; json.load\\(open\\('.claude/settings.json',encoding='utf-8'\\)\\); print\\('settings.json JSON valido'\\)\")"
     ],
     "additionalDirectories": [
-      "C:\\Projetos\\no-more-jumpscares\\debug"
+      "C:\\Projetos\\no-more-jumpscares\\debug",
+      "\\tmp"
     ]
   }
 }
