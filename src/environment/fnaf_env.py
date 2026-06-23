@@ -211,6 +211,11 @@ CHECKPOINTS_NOITE = [
 # degenerados (ex.: acampar 100% na câmera). O sinal denso é SOBREVIVÊNCIA POR TEMPO REAL
 # (não por nº de steps: pagar por step premia spammar ação rápida) e o orçamento total da
 # noite fica << vitória, então VENCER domina "só durar".
+# Terminais — magnitudes do desfecho. RECOMPENSA_MORTE é compartilhada com o caminho de
+# interrupção (_interromper_episodio): o Golden Freddy FECHA o jogo (crash-jumpscare) em vez
+# de mostrar Game Over, então "janela sumiu no meio da noite" é uma MORTE e leva o mesmo -100.
+RECOMPENSA_MORTE      = -100.0 # derrota (terminal): qualquer animatrônico, INCLUI Golden Freddy
+RECOMPENSA_VITORIA    = 500.0  # vitória (terminal): sobreviver à noite (>> orçamento denso)
 DURACAO_NOITE         = 535.0  # ~6h em segundos reais (último checkpoint) — base do progresso
 RECOMPENSA_NOITE      = 60.0   # orçamento denso de uma noite inteira (Σ ≈ 60 << vitória 500)
 BONUS_MARCO_HORA      = 3.0    # marco por hora alcançada (flat, SEM peso de energia): 6×3 = 18
@@ -289,6 +294,18 @@ class FNAFEnv(gym.Env):
     def _janela_do_jogo_aberta(self) -> bool:
         import pygetwindow as gw
         return bool(gw.getWindowsWithTitle(WINDOW_TITLE))
+
+    def _esperar_janela(self, timeout: float, intervalo: float = 0.5) -> bool:
+        """Sonda a janela do jogo até ela aparecer ou estourar o timeout. Substitui o sleep
+        fixo do fallback: o jogo às vezes demora mais que REABRIR_ESPERA_SEGUNDOS para mostrar
+        a janela, e a checagem única derrubava o fallback com "janela nao encontrada" mesmo
+        quando o jogo estava só lento para abrir. Retorna assim que a janela existe."""
+        fim = time.perf_counter() + timeout
+        while time.perf_counter() < fim:
+            if self._janela_do_jogo_aberta():
+                return True
+            time.sleep(intervalo)
+        return self._janela_do_jogo_aberta()
 
     def _camera_aberta_por_template(self) -> bool | None:
         """Verifica estado real da câmera via matchTemplate no indicador 'YOU' do mapa.
@@ -462,7 +479,11 @@ class FNAFEnv(gym.Env):
             return False
 
         print("[FALLBACK] Jogo fechado detectado. Relancando executavel...")
-        time.sleep(REABRIR_ESPERA_SEGUNDOS)
+        # Sonda a janela (até REABRIR_ESPERA_SEGUNDOS, no mínimo 30s) em vez de um sleep fixo:
+        # o jogo costuma demorar para aparecer e o foco único falhava cedo demais.
+        if not self._esperar_janela(max(REABRIR_ESPERA_SEGUNDOS, 30)):
+            print("[FALLBACK] Janela nao encontrada apos relancamento.")
+            return False
 
         if not self.capture.focar_janela(WINDOW_TITLE):
             print("[FALLBACK] Janela nao encontrada apos relancamento.")
@@ -474,7 +495,14 @@ class FNAFEnv(gym.Env):
         print("[FALLBACK] Jogo recolocado em modo janela (ALT+ENTER).")
         return True
 
-    def _interromper_episodio(self, motivo: str):
+    def _interromper_episodio(self, motivo: str, como_morte: bool = False):
+        """Encerra o episódio quando o jogo some no meio da noite e tenta reabri-lo.
+
+        como_morte=True (janela fechada): no FNAF1 só o Golden Freddy FECHA o jogo (os outros
+        mostram Game Over com a janela aberta → caem na detecção de morte normal). Então janela
+        sumida = morte por Golden Freddy → leva RECOMPENSA_MORTE e desfecho "morte" (avança a
+        noite igual a qualquer morte). como_morte=False (falha transitória de captura): neutro
+        (0.0, sem desfecho) — não dá pra afirmar que o jogador morreu."""
         if self._botao_luz_pressionado:
             try:
                 self.capture.soltar_botao(*self._botao_luz_pressionado)
@@ -486,17 +514,23 @@ class FNAFEnv(gym.Env):
         if not recuperado:
             motivo = f"{motivo} (fallback sem sucesso)"
 
+        recompensa = RECOMPENSA_MORTE if como_morte else 0.0
+        if como_morte:
+            self._resultado_episodio = "morte"   # avança a noite no próximo reset (Decisão 7)
+
         info = {
             "passos":       self.passos,
             "energia":      self.energia,
+            "tempo":        self.tempo_jogo,
             "tempo_real":   time.perf_counter() - (self.episode_start_time or time.perf_counter()),
             "porta_esq":    self.porta_esq,
             "porta_dir":    self.porta_dir,
             "camera_aberta": self.camera_aberta,
             "camera_ativa": self.camera_ativa,
-            "morreu":       False,
-            "interrompido": True,
+            "morreu":       como_morte,
+            "interrompido": not como_morte,
             "ocorrido":     motivo,
+            "noite":        self.noite,
         }
 
         observacao = {
@@ -504,7 +538,7 @@ class FNAFEnv(gym.Env):
             # Deriva do espaço (10 estados após a ameaça da Decisão 4) p/ não divergir
             "estados": np.zeros(self.observation_space["estados"].shape, dtype=np.float32)
         }
-        return observacao, 0.0, True, False, info
+        return observacao, recompensa, True, False, info
 
     def _transicao_noite(self) -> None:
         """Atualiza self.noite pelo desfecho do episódio anterior (Decisão 7): a vitória SEMPRE
@@ -588,7 +622,8 @@ class FNAFEnv(gym.Env):
         self._atualizar_tempo()
 
         if not self._verificar_e_focar_janela():
-            return self._interromper_episodio("janela do jogo nao encontrada")
+            # Janela fechada no meio da noite = Golden Freddy (crash-jumpscare). Conta como morte.
+            return self._interromper_episodio("janela fechada (Golden Freddy)", como_morte=True)
 
         # ── Verificação de sincronia via template "YOU" do mapa de câmeras ────
         # Checado a cada 3 steps, apenas fora do cooldown (evita falsa correção
@@ -941,9 +976,9 @@ class FNAFEnv(gym.Env):
         # de "jogar mal": vencer >> morrer. O shaping (γ·Φ'−Φ, somado em step(), fora daqui)
         # só acelera o aprendizado SEM mover este ótimo — por isso não há bônus por ação.
         if morreu:
-            return -100.0
+            return RECOMPENSA_MORTE
         if sobreviveu:
-            return +500.0
+            return RECOMPENSA_VITORIA
 
         # ── Sinal denso = SOBREVIVÊNCIA POR TEMPO REAL (não por nº de steps) ──────────
         # Pagar por step fixo num env de tempo real (step de duração variável) paga MAIS
