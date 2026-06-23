@@ -61,6 +61,7 @@ class LogCallback(BaseCallback):
         self.mortes            = 0
         self.vitorias          = 0
         self.interrompidos     = 0
+        self.noite_max         = 1     # noite mais avançada já alcançada (contexto p/ checkpoints)
         self.recompensa_total  = 0.0
         self._pausa_disponivel = True
         self._log_steps        = log_steps
@@ -129,6 +130,7 @@ class LogCallback(BaseCallback):
             tempo_ep_minutos = info.get("tempo_real", 0.0) / 60.0
 
             self.episodio += 1
+            self.noite_max = max(self.noite_max, info.get("noite", 1))
             interrompido = info.get("interrompido", False)
 
             if interrompido:
@@ -224,6 +226,37 @@ class EntropiaSchedule(BaseCallback):
         return True
 
 
+class CheckpointComLog(CheckpointCallback):
+    """CheckpointCallback que ANUNCIA cada checkpoint no terminal com o contexto do treino
+    (lido do LogCallback). Serve pra decidir até onde é seguro voltar: mostra o arquivo salvo,
+    o step, o episódio em andamento e a saúde naquele instante (eps válidos, vitórias, noite
+    máx). O checkpoint é tirado ENTRE steps, então pega o episódio atual no meio — por isso o
+    print diz 'durante o ep X' e qual foi o último concluído."""
+
+    def __init__(self, *args, log_callback: "LogCallback | None" = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._log = log_callback
+
+    def _on_step(self) -> bool:
+        resultado = super()._on_step()
+        if self.save_freq > 0 and self.n_calls % self.save_freq == 0:
+            nome = f"{self.name_prefix}_{self.num_timesteps}_steps.zip"
+            if self._log is not None:
+                concluidos = self._log.episodio
+                validos    = self._log.episodios_validos
+                taxa = (self._log.vitorias / validos * 100) if validos else 0.0
+                contexto = (
+                    f"   step {self.num_timesteps:,} | tirado DURANTE o ep {concluidos + 1} "
+                    f"(ultimo ep CONCLUIDO: {concluidos})\n"
+                    f"   ate aqui: {validos} eps validos | {self._log.vitorias} vitorias "
+                    f"({taxa:.1f}%) | noite max alcancada: {self._log.noite_max}"
+                )
+            else:
+                contexto = f"   step {self.num_timesteps:,}"
+            print(f"\n[CHECKPOINT] salvo: {nome}\n{contexto}\n")
+        return resultado
+
+
 def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bool = False,
             bc_path: str = None):
     print("Iniciando ambiente FNAF1...")
@@ -275,19 +308,22 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
             else:
                 print(f"[BC warmstart] caminho não encontrado, ignorando: {bc_path}")
 
-    checkpoint = CheckpointCallback(
+    # log_callback ANTES do checkpoint na lista: assim, no step do save, o contador de episódio
+    # já está atualizado quando CheckpointComLog imprime o contexto.
+    log_callback = LogCallback(log_steps=log_steps)
+    checkpoint = CheckpointComLog(
         save_freq=10_000,
         save_path=PASTA_MODELOS,
         name_prefix=f"{_env_str_obrigatorio('PC')}_fnaf_ppo",
+        log_callback=log_callback,
     )
-    log_callback = LogCallback(log_steps=log_steps)
     entropia = EntropiaSchedule()  # Decisão 6: decai ent_coef após a taxa de vitória estabilizar
 
     print(f"Treinando por {timesteps:,} timesteps...\n")
     try:
         modelo.learn(
             total_timesteps=timesteps,
-            callback=[checkpoint, log_callback, entropia],
+            callback=[log_callback, checkpoint, entropia],
             reset_num_timesteps=carregar_modelo is None,
         )
     except KeyboardInterrupt:
