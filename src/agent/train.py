@@ -224,7 +224,8 @@ class EntropiaSchedule(BaseCallback):
         return True
 
 
-def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bool = False):
+def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bool = False,
+            bc_path: str = None):
     print("Iniciando ambiente FNAF1...")
     print("ATENÇÃO: Deixe o jogo aberto e na tela inicial!")
     print("Dica: segure F12 a qualquer momento para pausar.\n")
@@ -264,6 +265,15 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
             tensorboard_log=PASTA_LOGS,
             device="auto",
         )
+        # BC warmstart (opcional): inicializa a percepção a partir de um checkpoint (modelo de
+        # BC ou outro). É INIT, não recompensa — o RL fica livre p/ divergir (não fixa o ótimo).
+        # Compatível com a LSTM (transfere só o MultimodalExtractor; ver transferir_pesos).
+        if bc_path:
+            if os.path.exists(bc_path):
+                from src.agent.behavioral_cloning import transferir_pesos
+                transferir_pesos(modelo, bc_path)
+            else:
+                print(f"[BC warmstart] caminho não encontrado, ignorando: {bc_path}")
 
     checkpoint = CheckpointCallback(
         save_freq=10_000,

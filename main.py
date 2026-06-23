@@ -60,7 +60,31 @@ def modo_treino():
         else:
             print("Nenhum modelo encontrado — começando do zero")
 
-    treinar(timesteps=500_000, carregar_modelo=ultimo_modelo)
+    # BC warmstart (opcional): --bc <caminho.zip> inicializa a percepção a partir de um modelo
+    # de BC. Combina bem com --novo (treino fresco). Compatível com a LSTM (FNAF_USAR_LSTM=1).
+    bc_path = None
+    if "--bc" in sys.argv:
+        i = sys.argv.index("--bc")
+        bc_path = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
+        if bc_path:
+            print(f"BC warmstart: inicializando a partir de {bc_path}")
+
+    treinar(timesteps=500_000, carregar_modelo=ultimo_modelo, bc_path=bc_path)
+
+
+def modo_bc():
+    """Treina Behavioral Cloning a partir de datasets de gameplay humano gravados
+    (src/utils/gravar_gameplay.py). Gera modelos/fnaf_bc.zip para warmstart do treino.
+    NÃO precisa do jogo aberto (lê frames já gravados).
+    Uso: python main.py bc dados/.../dataset.json [outro.json ...]"""
+    from src.agent.behavioral_cloning import treinar_bc
+
+    caminhos = [a for a in sys.argv[2:] if not a.startswith("--")]
+    if not caminhos:
+        print("Uso: python main.py bc <dataset.json> [outro.json ...]")
+        print("Grave demos antes com: python -m src.utils.gravar_gameplay")
+        return
+    treinar_bc(caminhos)
 
 
 def modo_jogar():
@@ -163,7 +187,10 @@ if __name__ == "__main__":
         modo_treino()
     elif modo == "jogar":
         modo_jogar()
+    elif modo == "bc":
+        modo_bc()
     else:
         print(f"Modo desconhecido: {modo}")
-        print("Use: python main.py teste | python main.py treino [--novo] | "
-              "python main.py jogar [--ablacao imagem|estados]")
+        print("Use: python main.py teste | python main.py treino [--novo] [--bc <zip>] | "
+              "python main.py jogar [--ablacao imagem|estados] | "
+              "python main.py bc <dataset.json ...>")

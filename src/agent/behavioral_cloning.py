@@ -146,22 +146,34 @@ def treinar_bc(caminhos_json: list[str], epochs: int = 50, lr: float = 1e-3):
     return modelo
 
 
-def combinar_bc_com_ppo(caminho_bc: str = "modelos/fnaf_bc.zip",
-                         caminho_ppo: str = "modelos/fnaf_merged.zip"):
-    """DESCONTINUADO: média de pesos entre o modelo BC e um modelo PPO
-    treinado de outra inicialização NÃO combina o aprendizado — os neurônios
-    das duas redes não se correspondem e o resultado é uma política quebrada.
+def transferir_pesos(modelo_rl, caminho_origem: str = "modelos/fnaf_bc.zip") -> None:
+    """Warmstart: copia os pesos da POLÍTICA de um checkpoint SB3 (.zip) para um modelo de RL
+    fresco, via load_state_dict(strict=False). Reusa só o que casa por nome E shape — o
+    MultimodalExtractor (CNN+MLP) SEMPRE casa; as cabeças pi/vf casam quando o net_arch coincide.
 
-    O fluxo correto é usar o modelo BC diretamente como ponto de partida do
-    PPO: treine o BC, copie/renomeie modelos/fnaf_bc.zip para a pasta
-    modelos/ como único modelo e rode `python main.py treino` — o treino
-    continua a partir dele.
-    """
-    raise RuntimeError(
-        "combinar_bc_com_ppo foi descontinuado: a média de pesos entre redes "
-        "de inicializações diferentes quebra a política. Continue o treino "
-        "PPO diretamente a partir de modelos/fnaf_bc.zip."
-    )
+    Compatível com a LSTM: o BC treina um PPO feedforward, mas ao transferir pra um RecurrentPPO
+    só o MultimodalExtractor bate (as chaves da LSTM e do mlp pós-LSTM têm shape diferente e são
+    ignoradas) — ou seja, aquece a PERCEPÇÃO, que é a parte cara, e deixa a memória pro RL aprender.
+
+    É o caminho CORRETO de combinar BC + RL: inicializar a partir dos pesos, NÃO fazer média entre
+    redes de inicializações diferentes (que quebra a política — os neurônios não se correspondem).
+    Substitui o antigo combinar_bc_com_ppo. É INIT, não recompensa: o RL fica livre p/ divergir."""
+    from stable_baselines3.common.save_util import load_from_zip_file
+
+    _, params, _ = load_from_zip_file(caminho_origem, device="auto")
+    estado_origem = params.get("policy") if isinstance(params, dict) else None
+    if estado_origem is None:
+        raise RuntimeError(f"Checkpoint sem state_dict de 'policy': {caminho_origem}")
+
+    alvo = modelo_rl.policy.state_dict()
+    casados = {k: v for k, v in estado_origem.items()
+               if k in alvo and alvo[k].shape == v.shape}
+    modelo_rl.policy.load_state_dict(casados, strict=False)
+
+    print(f"[BC warmstart] transferidos {len(casados)}/{len(alvo)} tensores de {caminho_origem}")
+    nao_vieram = sorted({k.split('.')[0] for k in alvo if k not in casados})
+    if nao_vieram:
+        print(f"[BC warmstart] init aleatório (não transferido): {', '.join(nao_vieram)}")
 
 
 if __name__ == "__main__":
