@@ -39,8 +39,13 @@ GRUPOS: list[tuple[str, list[PassoCalibracao]]] = [
         "Menu inicial",
         [
             PassoCalibracao(
-                "RESET_CLICK",
-                "Botao de iniciar/continuar no menu",
+                "NEW_GAME_CLICK",
+                "Botao New Game (menu) — zera o save p/ Noite 1",
+                prefixo_env="FNAF",
+            ),
+            PassoCalibracao(
+                "CONTINUE_CLICK",
+                "Botao Continue (menu) — retoma a noite onde morreu",
                 prefixo_env="FNAF",
             ),
         ],

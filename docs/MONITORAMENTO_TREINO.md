@@ -155,5 +155,5 @@ mas tenha em mente ao comparar antes/depois. Para um retorno mais limpo, guarde 
 ## Referências no código
 - Métricas/logs: `src/agent/train.py` (`LogCallback`, `CheckpointComLog`).
 - Desfecho de morte/Golden e método de reset: `src/environment/fnaf_env.py`
-  (`_interromper_episodio`, `_transicao_noite`, `RESET_METODO`).
+  (`_interromper_episodio`, `_preparar_reset`/`decidir_reset`, `RESET_METODO`, `NOITE_DESEJADA`).
 - Script: `scripts/metricas_treino.py`.

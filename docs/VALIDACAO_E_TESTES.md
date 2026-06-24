@@ -23,7 +23,7 @@ critério de desistência**.
 - [ ] Conferir os imports:
       `venv/Scripts/python.exe -c "import numpy,torch,stable_baselines3,sb3_contrib,gymnasium,cv2; print('OK', torch.__version__, torch.cuda.is_available())"`
 - [ ] `.env` criado e ajustado para este PC:
-      `Copy-Item .env.example .env` → editar `FNAF_WINDOW_TITLE`, `PC`, coordenadas e `FNAF_RESET_CLICK`.
+      `Copy-Item .env.example .env` → editar `FNAF_WINDOW_TITLE`, `PC`, coordenadas e os botões do menu (`FNAF_NEW_GAME_CLICK`, `FNAF_CONTINUE_CLICK`).
 
 > **GPU:** o `torch` do PyPI vem **CPU-only** (`+cpu`) — o treino roda, porém mais devagar. Para CUDA,
 > reinstale o torch pelo índice da sua versão de CUDA (`--index-url https://download.pytorch.org/whl/cuXXX`).
@@ -55,9 +55,9 @@ critério de desistência**.
   - **DIR:** `Chica` sobe com a luz direita.
   - **energia:** acompanha o número do jogo e segura (`--`) em câmera/flicker.
 - [ ] `python main.py teste` → confere a observação inicial **e a Noite lida** (deve dizer Noite 1).
-- [ ] **Manual:** confirmar que `FNAF_RESET_CLICK` cai **no botão que casa com `FNAF_RESET_METODO`**
-      (`new_game` → botão "New Game"; `continue` → "Continue"). Se errar, após a morte o reset clica
-      no lugar errado e a Noite desincroniza.
+- [ ] **Manual:** confirmar que `FNAF_NEW_GAME_CLICK` e `FNAF_CONTINUE_CLICK` caem **cada um no seu
+      botão do menu** (que só aparece após a morte). Vencer emenda direto na próxima noite (sem menu).
+      Se errar a coordenada, após a morte o reset clica no lugar errado e a Noite desincroniza.
 
 ---
 

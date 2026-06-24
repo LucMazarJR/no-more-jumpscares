@@ -118,16 +118,55 @@ WINDOW_TITLE = _env_str_obrigatorio("FNAF_WINDOW_TITLE")
 GAME_EXECUTABLE_PATH = _env_str_opcional("FNAF_EXECUTABLE_PATH", "")
 REABRIR_ESPERA_SEGUNDOS = max(1, _env_int_opcional("FNAF_REABRIR_ESPERA_SEGUNDOS", 10))
 POS_ALT_ENTER_ESPERA_SEGUNDOS = max(1, _env_int_opcional("FNAF_POS_ALT_ENTER_ESPERA_SEGUNDOS", 3))
-RESET_CLICK = (
-    _env_int_obrigatorio("FNAF_RESET_CLICK_X"),
-    _env_int_obrigatorio("FNAF_RESET_CLICK_Y"),
-)
-# Método de reset (Decisão 7) — define a noite após uma MORTE (a vitória SEMPRE avança):
-#   new_game = volta pra Noite 1 (padrão) ; continue = repete a noite atual.
-# A noite é rastreada internamente pelo desfecho (sem ler a tela — a fonte do "Night X" não casa
-# com os glifos de energia). Se o win/death detection erra, a noite desincroniza (mesmo risco do reward).
+# Método de reset (Decisão 7) — o MENU (com New Game / Continue) só aparece depois de uma MORTE;
+# VENCER emenda direto na próxima noite (sem menu, sem clique). Por isso a escolha New Game vs
+# Continue só acontece na morte:
+#   new_game = currículo clássico: morte → New Game (Noite 1) ; vitória → próxima noite.
+#   continue = MIRA FNAF_NOITE_DESEJADA: morte na/abaixo da alvo → Continue (retoma a noite),
+#              morte ACIMA da alvo → New Game (reescala do 1). Vencer a alvo obriga jogar D+1 até
+#              morrer (auto-avanço, não há menu pra voltar antes) — custo inerente da mecânica.
+# A noite é rastreada internamente pelo desfecho (sem ler a tela). Falsa vitória/derrota é rara e
+# se reancora sozinha na próxima morte; o 1º reset de cada execução SEMPRE faz New Game (Noite 1).
 RESET_METODO = _env_str_opcional("FNAF_RESET_METODO", "new_game").lower()
 MAX_NOITE = 7  # p/ normalizar noite/MAX_NOITE no estado (FNAF1: noites 1-6 + custom)
+# Noite alvo do modo "continue" (1..MAX_NOITE). O modo new_game ignora. Default 1.
+NOITE_DESEJADA = max(1, min(_env_int_opcional("FNAF_NOITE_DESEJADA", 1), MAX_NOITE))
+# Espera (s) após uma VITÓRIA, enquanto o jogo avança sozinho pra próxima noite (6AM → intro).
+VITORIA_ESPERA_SEGUNDOS = max(1, _env_int_opcional("FNAF_VITORIA_ESPERA_SEGUNDOS", 20))
+
+# Botões do menu (obrigatórios) — calibre os dois com: python -m src.utils.calibrar_por_passos
+NEW_GAME_CLICK = (_env_int_obrigatorio("FNAF_NEW_GAME_CLICK_X"), _env_int_obrigatorio("FNAF_NEW_GAME_CLICK_Y"))
+CONTINUE_CLICK = (_env_int_obrigatorio("FNAF_CONTINUE_CLICK_X"), _env_int_obrigatorio("FNAF_CONTINUE_CLICK_Y"))
+
+
+def decidir_reset(metodo: str, resultado: str | None, noite_atual: int,
+                  noite_desejada: int, primeiro_reset: bool) -> tuple[str, int]:
+    """Decide a AÇÃO de reset e a noite do próximo episódio (Decisão 7). Pura — testável offline.
+
+    Ações: "new_game" (clica New Game → Noite 1), "continue" (clica Continue → retoma a noite onde
+    morreu) e "nenhum" (NÃO clica: o jogo já emendou na próxima noite após a vitória — não há menu).
+    O menu só existe após uma MORTE, então é só aí que se escolhe New Game vs Continue.
+
+      • 1º reset da execução → New Game (ancora o save na Noite 1).
+      • vitória → "nenhum" (auto-avanço pra próxima noite); vale p/ os dois métodos.
+      • truncado/None → "nenhum" (sem morte detectada = sem menu); mantém a noite.
+      • morte:
+          new_game → New Game (Noite 1).
+          continue → mira `noite_desejada`: morte ACIMA da alvo → New Game (reescala do 1);
+                     morte na/abaixo da alvo → Continue (retoma essa noite).
+    """
+    if primeiro_reset:
+        return "new_game", 1
+    if resultado == "vitoria":
+        return "nenhum", min(noite_atual + 1, MAX_NOITE)
+    if resultado != "morte":
+        return "nenhum", noite_atual              # truncado por tempo: sem menu p/ clicar
+    if metodo == "new_game":
+        return "new_game", 1
+    alvo = max(1, min(noite_desejada, MAX_NOITE))
+    if noite_atual > alvo:
+        return "new_game", 1                      # morreu acima da alvo → reescala do 1
+    return "continue", noite_atual                # morreu na/abaixo da alvo → retoma a noite
 STEP_DELAY = _env_float_opcional("FNAF_STEP_DELAY", 0.35)
 SIDE_SWITCH_DELAY = _env_float_opcional("FNAF_SIDE_SWITCH_DELAY", 0.85)
 CAMERA_EXIT_DELAY = _env_float_opcional("FNAF_CAMERA_EXIT_DELAY", 0.65)
@@ -290,6 +329,8 @@ class FNAFEnv(gym.Env):
         # NÃO é zerada no reset() (persiste entre episódios; só a transição abaixo a muda).
         self.noite = 1
         self._resultado_episodio = None   # "vitoria" | "morte" | None (interrompido/truncado)
+        self._primeiro_reset = True       # 1º reset da execução ancora o save na Noite 1 (New Game)
+        self._acao_reset = "new_game"     # ação ("new_game"|"continue"|"nenhum") decidida por _preparar_reset
 
     def _janela_do_jogo_aberta(self) -> bool:
         import pygetwindow as gw
@@ -516,7 +557,12 @@ class FNAFEnv(gym.Env):
 
         recompensa = RECOMPENSA_MORTE if como_morte else 0.0
         if como_morte:
-            self._resultado_episodio = "morte"   # avança a noite no próximo reset (Decisão 7)
+            # Golden Freddy: o jogo reabre no menu principal → decisão de morte normal no reset.
+            self._resultado_episodio = "morte"
+        else:
+            # Falha de captura: reabrimos o jogo (volta ao menu). Estado incerto → próximo reset
+            # faz New Game, reancorando na Noite 1 (caso raro; se reancora sozinho de qualquer forma).
+            self._primeiro_reset = True
 
         info = {
             "passos":       self.passos,
@@ -540,14 +586,15 @@ class FNAFEnv(gym.Env):
         }
         return observacao, recompensa, True, False, info
 
-    def _transicao_noite(self) -> None:
-        """Atualiza self.noite pelo desfecho do episódio anterior (Decisão 7): a vitória SEMPRE
-        avança; a morte depende do método de reset (new_game → Noite 1; continue → mantém).
-        interrompido/truncado (resultado None) mantêm a noite. Testável offline."""
-        if self._resultado_episodio == "vitoria":
-            self.noite = min(self.noite + 1, MAX_NOITE)
-        elif self._resultado_episodio == "morte" and RESET_METODO == "new_game":
-            self.noite = 1
+    def _preparar_reset(self) -> None:
+        """Decide a noite e o BOTÃO do menu do próximo episódio (Decisão 7) via decidir_reset,
+        a partir do desfecho anterior, do método (new_game/continue) e da noite alvo. Consome o
+        flag de 1º reset (que força New Game) e o resultado do episódio. Testável offline."""
+        self._acao_reset, self.noite = decidir_reset(
+            RESET_METODO, self._resultado_episodio, self.noite,
+            NOITE_DESEJADA, self._primeiro_reset,
+        )
+        self._primeiro_reset = False
         self._resultado_episodio = None
 
     def reset(self, seed=None, options=None):
@@ -559,7 +606,7 @@ class FNAFEnv(gym.Env):
                 "Configure as variaveis obrigatorias antes de executar."
             )
 
-        self._transicao_noite()   # atualiza self.noite pelo desfecho anterior (Decisão 7)
+        self._preparar_reset()   # decide self.noite e self._acao_reset pelo desfecho anterior (Decisão 7)
 
         self.passos           = 0
         self.energia          = 100.0
@@ -606,10 +653,17 @@ class FNAFEnv(gym.Env):
             )
         time.sleep(0.5)
 
-        self.capture.clicar(*RESET_CLICK)
-        time.sleep(15)
-        self.capture.clicar(*RESET_CLICK)
-        time.sleep(20)
+        # Ação decidida por _preparar_reset. "nenhum" = vitória: o jogo já emendou na próxima noite
+        # sozinho (sem menu) — só espera a transição 6AM→intro, sem clicar. Caso contrário está no
+        # menu (morte ou 1º reset): clica New Game ou Continue (duplo-clique com sleeps p/ robustez).
+        if self._acao_reset == "nenhum":
+            time.sleep(VITORIA_ESPERA_SEGUNDOS)
+        else:
+            botao_reset = NEW_GAME_CLICK if self._acao_reset == "new_game" else CONTINUE_CLICK
+            self.capture.clicar(*botao_reset)
+            time.sleep(15)
+            self.capture.clicar(*botao_reset)
+            time.sleep(20)
         self.episode_start_time = time.perf_counter()
         self._t_ultima_energia  = self.episode_start_time
 
