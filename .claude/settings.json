@@ -41,7 +41,11 @@
       "Bash(cat)",
       "Bash(venv/Scripts/python.exe -c \"import json; json.load\\(open\\('.claude/settings.json',encoding='utf-8'\\)\\); print\\('settings.json JSON valido'\\)\")",
       "PowerShell(if \\(Test-Path \"venv\\\\Scripts\\\\python.exe\"\\) { $py = \"venv\\\\Scripts\\\\python.exe\" } else { $py = \"python\" }; Write-Output \"Usando: $py\"; & $py -m src.utils.testar_noite; Write-Output \"---- recompensa ----\"; & $py -m src.utils.testar_recompensa)",
-      "PowerShell(venv\\\\Scripts\\\\python.exe -m src.utils.testar_noite)"
+      "PowerShell(venv\\\\Scripts\\\\python.exe -m src.utils.testar_noite)",
+      "Bash(venv/Scripts/python.exe -m py_compile scripts/metricas_treino.py)",
+      "Bash(venv/Scripts/python.exe scripts/metricas_treino.py --log __TRACKED_VAR__/fake_treino.log --metodo continue --noite-desejada 4)",
+      "Bash(venv/Scripts/python.exe scripts/metricas_treino.py --log __TRACKED_VAR__/fake_treino.log --metodo new_game)",
+      "Bash(venv/Scripts/python.exe scripts/metricas_treino.py --log __TRACKED_VAR__/fake_treino.log --metodo continue --noite-desejada 4 --janela 10)"
     ],
     "additionalDirectories": [
       "C:\\Projetos\\no-more-jumpscares\\debug",
