@@ -141,12 +141,19 @@ Formato padrão do log textual (`logs/treino.log.txt`):
 ============================================================
 Treino iniciado
 ============================================================
-Ep    1 | MORTE    | Passos:    455 | Recompensa:    114.8 | Taxa vitória: 0.0%
-pc0 | Ep    2 | MORTE    | Passos:    510 | Recompensa:     37.5 | Taxa vitória: 0.0%
+pc0 | Ep    1 | Noite 1 | MORTE    | Passos:    455 | Tempo:    5.20 min | Recompensa:    114.8 | Taxa vitória: 0.0% | Energia fim:  0.0% | Causa: morte_energia
+pc0 | Ep    2 | Noite 1 | VITORIA  | Passos:    600 | Tempo:    9.00 min | Recompensa:    540.0 | Taxa vitória: 50.0% | Energia fim:  0.0% | Causa: vitoria_apagao
 ```
 
-Em caso de fechamento inesperado do jogo, o episódio é marcado como
-`INTERROMPIDO`. Esses episódios não contam para a taxa de vitória.
+O campo `Causa:` separa **skill de sorte** no desfecho:
+- `vitoria_gerida` — venceu com energia de pé (gestão real); `vitoria_apagao` — venceu **após** a
+  energia zerar (luzes apagadas; o 6 AM chegou antes do Freddy — vitória de alta variância);
+- `morte_energia` — apagou e o Freddy pegou (gargalo de energia); `morte_animatronico` — morreu
+  **com** energia (um animatrônico passou a porta — defesa/timing).
+
+O `scripts/metricas_treino.py` quebra esses tipos por noite (quanto da taxa de vitória é sorte do
+apagão, qual o gargalo de morte). Em caso de fechamento inesperado do jogo, o episódio é marcado
+como `INTERROMPIDO` e não conta para a taxa de vitória.
 
 Exemplos úteis para envio ao MongoDB:
 

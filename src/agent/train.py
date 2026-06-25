@@ -151,6 +151,13 @@ class LogCallback(BaseCallback):
                 else 0.0
             )
 
+            # Causa do desfecho (env): separa vitória/morte por gestão de energia vs. por apagão —
+            # quanto da taxa de vitória é skill e quanto é sorte do RNG pós-blackout. Fallback p/
+            # INTERROMPIDO (sem causa) = o próprio resultado em minúsculas.
+            causa = info.get("causa") or resultado.strip().lower()
+            energia_fim = info.get("energia")
+            energia_str = f"{energia_fim:5.1f}%" if energia_fim is not None else "   ?  "
+
             linha = (
                 f"{_env_str_obrigatorio('PC')} | "
                 f"Ep {self.episodio:4d} | "
@@ -159,7 +166,9 @@ class LogCallback(BaseCallback):
                 f"Passos: {info.get('passos', 0):6d} | "
                 f"Tempo: {tempo_ep_minutos:7.2f} min | "
                 f"Recompensa: {self.recompensa_total:8.1f} | "
-                f"Taxa vitória: {taxa_vitoria:.1f}%"
+                f"Taxa vitória: {taxa_vitoria:.1f}% | "
+                f"Energia fim: {energia_str} | "
+                f"Causa: {causa}"
             )
 
             print(linha)

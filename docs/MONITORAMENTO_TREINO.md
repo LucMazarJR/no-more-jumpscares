@@ -41,6 +41,23 @@ episódios_noite_N`. Se `p₁ = 0.3`, a noite 2 recebe só ~30% das amostras da 
 faminta. `continue` existe justamente para **inflar nₙ na frente** (o agente "mora" na noite
 onde morreu em vez de voltar para a 1).
 
+### 2.1. Tipo de desfecho — separa *skill* de *sorte* (campo `Causa:`)
+
+A win rate sozinha mistura vitórias por **gestão** com vitórias por **sorte do apagão**. O log
+agora registra a causa de cada desfecho terminal, e o script quebra por noite:
+
+| rótulo | o que é | o que diz |
+|--------|---------|-----------|
+| `vitoria_gerida` | venceu com energia de pé | vitória por **skill** (gestão do recurso) |
+| `vitoria_apagao` | venceu **após** a energia zerar | venceu **no fio** — o 6 AM chegou antes do Freddy pós-blackout. Alta variância; infla a win rate sem refletir competência |
+| `morte_energia` | apagou e o Freddy pegou | gargalo = **energia** (atacar a parede de energia rende mais que detecção de ameaça) |
+| `morte_animatronico` | morreu **com** energia | gargalo = **defesa/timing** (animatrônico passou a porta) |
+
+Leitura prática: **% de vitórias por apagão alto** → sua win rate superestima a skill, espere
+variância (pode "regredir" só por azar do RNG). **% de mortes por energia alto** → o agente já
+sobrevive a noite quase inteira e o que falta é *economizar energia*, não defender melhor. O
+script imprime a tabela e um diagnóstico automático da noite com mais amostra.
+
 ---
 
 ## 3. Como rodar

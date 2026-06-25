@@ -34,6 +34,14 @@ LINHA = re.compile(
     r"Ep\s+(\d+)\s+\|\s+Noite\s+(\d+)\s+\|\s+(VITORIA|MORTE|INTERROMPIDO)\s+\|"
     r".*?Tempo:\s+([\d.]+)\s+min"
 )
+# "Causa:" so existe em logs pos-instrumentacao de desfecho (separa skill de sorte). Casa
+# separado p/ manter compatibilidade com logs antigos (onde o grupo fica None).
+CAUSA = re.compile(r"Causa:\s+([a-z_]+)")
+
+# Rotulos de causa do env (_classificar_desfecho). vitoria_apagao = venceu por SORTE (6 AM
+# chegou antes do Freddy pos-blackout); morte_energia = apagou e morreu (gargalo de energia).
+CAUSAS_VITORIA = ("vitoria_gerida", "vitoria_apagao")
+CAUSAS_MORTE   = ("morte_energia", "morte_animatronico")
 
 # Heuristicas da regra de decisao (ver doc). Pontos de partida, calibre olhando seus dados.
 P_ABASTECE   = 50.0   # win rate da noite anterior (%) que considera a frente "abastecida"
@@ -78,12 +86,15 @@ def carregar_config(metodo_cli: str | None, noite_cli: int | None,
     return metodo, max(1, min(noite, MAX_NOITE))
 
 
-def parse(caminho: Path) -> list[tuple[int, int, str, float]]:
-    eps: list[tuple[int, int, str, float]] = []
+def parse(caminho: Path) -> list[tuple[int, int, str, float, str | None]]:
+    eps: list[tuple[int, int, str, float, str | None]] = []
     for linha in caminho.read_text(encoding="utf-8", errors="ignore").splitlines():
         m = LINHA.search(linha)
         if m:
-            eps.append((int(m.group(1)), int(m.group(2)), m.group(3), float(m.group(4))))
+            mc = CAUSA.search(linha)
+            causa = mc.group(1) if mc else None
+            eps.append((int(m.group(1)), int(m.group(2)), m.group(3),
+                        float(m.group(4)), causa))
     return eps
 
 
@@ -101,9 +112,11 @@ def tendencia(t_mortes: list[float]) -> float | None:
     return media(t_mortes[meio:]) - media(t_mortes[:meio])
 
 
-def resumo_por_noite(eps: list[tuple[int, int, str, float]]) -> dict:
-    por: dict[int, dict] = defaultdict(lambda: {"vit": 0, "mortes": 0, "int": 0, "t_mortes": []})
-    for _, noite, res, tmin in eps:
+def resumo_por_noite(eps: list[tuple[int, int, str, float, str | None]]) -> dict:
+    por: dict[int, dict] = defaultdict(
+        lambda: {"vit": 0, "mortes": 0, "int": 0, "t_mortes": [],
+                 "causas": defaultdict(int)})
+    for _, noite, res, tmin, causa in eps:
         d = por[noite]
         if res == "VITORIA":
             d["vit"] += 1
@@ -112,6 +125,8 @@ def resumo_por_noite(eps: list[tuple[int, int, str, float]]) -> dict:
             d["t_mortes"].append(tmin)
         else:
             d["int"] += 1
+        if causa:
+            d["causas"][causa] += 1
     return por
 
 
@@ -140,6 +155,66 @@ def imprimir(por: dict, total: int, janela: int, noite_alvo: int | None = None) 
                 marca = "  ~ overshoot"
         print(f"{noite:>5} | {validos:>4} | {p:>5.1f}% | {d['vit']:>4} {d['mortes']:>5} "
               f"{d['int']:>4} | {tmed:>12.1f} | {tend_str:>9}{marca}")
+
+
+def imprimir_causas(por: dict) -> None:
+    """Quebra cada noite por TIPO de desfecho — separa skill de sorte. So imprime se a janela
+    tiver dados de 'Causa:' (logs anteriores a instrumentacao nao tem)."""
+    if not any(d["causas"] for d in por.values()):
+        print("\n(sem dados de 'Causa:' nesta janela — log anterior a instrumentacao de desfecho; "
+              "rode mais um trecho de treino p/ popular o tipo de vitoria/morte.)")
+        return
+    print("\nDesfecho por tipo (skill vs. sorte) — vit_apagao e morte_energia sao o eixo de energia:")
+    print(f"{'Noite':>5} | {'vit_ger':>7} {'vit_apg':>7} | {'mrt_enrg':>8} {'mrt_anim':>8} | "
+          f"{'%vit sorte':>10} | {'%mrt energ':>10}")
+    print("-" * 72)
+    for noite in sorted(por):
+        c = por[noite]["causas"]
+        vg, va = c.get("vitoria_gerida", 0), c.get("vitoria_apagao", 0)
+        me, ma = c.get("morte_energia", 0), c.get("morte_animatronico", 0)
+        vit, mortes = vg + va, me + ma
+        pct_sorte = f"{va / vit * 100:>9.0f}%" if vit else f"{'-':>10}"
+        pct_energ = f"{me / mortes * 100:>9.0f}%" if mortes else f"{'-':>10}"
+        print(f"{noite:>5} | {vg:>7} {va:>7} | {me:>8} {ma:>8} | {pct_sorte} | {pct_energ}")
+
+
+def diagnosticar_causas(por: dict, noite: int | None) -> None:
+    """Le os tipos de desfecho de UMA noite (a alvo no continue, senao a frente) e diz o que a
+    taxa de vitoria esconde: quanto e sorte do apagao e qual o gargalo de morte."""
+    nights = sorted(por)
+    if not nights:
+        return
+    if noite is not None and noite in por and por[noite]["causas"]:
+        foco = noite                                   # continue: a noite alvo
+    else:                                              # new_game: onde ha mais desfecho rotulado
+        foco = max(nights, key=lambda n: sum(por[n]["causas"].values()))
+    c = por[foco]["causas"]
+    if not c:
+        return
+    vg, va = c.get("vitoria_gerida", 0), c.get("vitoria_apagao", 0)
+    me, ma = c.get("morte_energia", 0), c.get("morte_animatronico", 0)
+    vit, mortes = vg + va, me + ma
+
+    print(f"\nDiagnostico de desfecho (noite {foco}):")
+    if vit:
+        p_sorte = va / vit * 100
+        if p_sorte >= 50:
+            print(f"   >> {p_sorte:.0f}% das vitorias sao por APAGAO (sorte): a energia zerou e o 6 AM "
+                  f"chegou antes do Freddy. A taxa de vitoria SUPERESTIMA a skill e tem variancia "
+                  f"alta — o agente ainda nao venceu por gestao de energia, venceu no fio.")
+        else:
+            print(f"   >> {100 - p_sorte:.0f}% das vitorias sao GERIDAS (com energia de pe): a maior "
+                  f"parte ja e skill, nao sorte do apagao. Sinal saudavel.")
+    if mortes:
+        p_energ = me / mortes * 100
+        if p_energ >= 50:
+            print(f"   >> {p_energ:.0f}% das mortes sao por ENERGIA (apagou e o Freddy pegou): o gargalo "
+                  f"e gestao de energia, nao defesa. Atacar a parede de energia rende mais que a "
+                  f"deteccao de ameaca.")
+        else:
+            print(f"   >> {p_energ:.0f}% das mortes sao por energia; {100 - p_energ:.0f}% sao "
+                  f"ANIMATRONICO passando a porta (defesa/timing) — gargalo de percepcao/acao, nao "
+                  f"de energia.")
 
 
 def _gargalo_climb(por: dict, alvo: int, min_reps: int = 8) -> tuple[int, float, int] | None:
@@ -293,6 +368,8 @@ def main() -> None:
     por = resumo_por_noite(janela)
     alvo = noite_desejada if metodo == "continue" else None
     imprimir(por, total=len(eps), janela=args.janela, noite_alvo=alvo)
+    imprimir_causas(por)
+    diagnosticar_causas(por, alvo)
 
     cfg = f"FNAF_RESET_METODO={metodo}"
     if metodo == "continue":

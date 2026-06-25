@@ -291,6 +291,7 @@ class FNAFEnv(gym.Env):
         self.passos    = 0
         self.max_passos = 10_000
         self.energia   = 100.0
+        self._apagou   = False  # energia chegou a 0 nesta noite (luzes forçadas a apagar)
         self.tempo_jogo = 0.0
         self.luz_esq = False
         self.luz_dir = False
@@ -610,6 +611,7 @@ class FNAFEnv(gym.Env):
 
         self.passos           = 0
         self.energia          = 100.0
+        self._apagou          = False  # vira True se a energia zerar (separa vitória/morte por apagão)
         self.tempo_jogo       = 0.0
         self.luz_esq          = False
         self.luz_dir          = False
@@ -711,6 +713,7 @@ class FNAFEnv(gym.Env):
                 if self._camera_aberta_por_template():
                     self.energia = 5.0
             if self.energia <= 0:
+                self._apagou = True   # apagão confirmado: separa vitória/morte por energia esgotada
                 self.porta_esq = False
                 self.porta_dir = False
                 self.luz_esq = False
@@ -814,9 +817,25 @@ class FNAFEnv(gym.Env):
             "acao_nome":      ACOES[acao],
             "bonus_hora":     self._total_bonus_hora,
             "noite":          self.noite,
+            "causa":          self._classificar_desfecho(morreu, sobreviveu),
         }
 
         return observacao, recompensa, terminado, truncado, info
+
+    def _classificar_desfecho(self, morreu: bool, sobreviveu: bool) -> str | None:
+        """Rotula o desfecho terminal p/ separar SKILL de SORTE na métrica (None se não terminou):
+          • vitoria_gerida    — venceu com a energia ainda de pé (gestão real do recurso);
+          • vitoria_apagao    — venceu DEPOIS da energia zerar (luzes apagadas; o 6 AM chegou
+                                antes do Freddy — vitória de alta variância, depende do RNG);
+          • morte_energia     — energia esgotou e o Freddy pegou no apagão (problema de gestão);
+          • morte_animatronico— morreu COM energia (um animatrônico passou a porta — defesa/timing).
+        Usa a flag self._apagou (energia chegou a 0), não a energia do step terminal: é o estado
+        de apagão de fato, imune a ruído de leitura e ao 6 AM esperado em ~5%."""
+        if not (morreu or sobreviveu):
+            return None
+        if sobreviveu:
+            return "vitoria_apagao" if self._apagou else "vitoria_gerida"
+        return "morte_energia" if self._apagou else "morte_animatronico"
 
     def _executar_acao(self, acao: int) -> bool:
         """Executa ação e retorna True se teve efeito, False se foi inválida."""

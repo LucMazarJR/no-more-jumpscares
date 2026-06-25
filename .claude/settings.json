@@ -45,7 +45,10 @@
       "Bash(venv/Scripts/python.exe -m py_compile scripts/metricas_treino.py)",
       "Bash(venv/Scripts/python.exe scripts/metricas_treino.py --log __TRACKED_VAR__/fake_treino.log --metodo continue --noite-desejada 4)",
       "Bash(venv/Scripts/python.exe scripts/metricas_treino.py --log __TRACKED_VAR__/fake_treino.log --metodo new_game)",
-      "Bash(venv/Scripts/python.exe scripts/metricas_treino.py --log __TRACKED_VAR__/fake_treino.log --metodo continue --noite-desejada 4 --janela 10)"
+      "Bash(venv/Scripts/python.exe scripts/metricas_treino.py --log __TRACKED_VAR__/fake_treino.log --metodo continue --noite-desejada 4 --janela 10)",
+      "Bash(cd \"c:/Projetos/no-more-jumpscares\")",
+      "Bash(python -)",
+      "PowerShell(python -m src.utils.testar_recompensa 2>&1)"
     ],
     "additionalDirectories": [
       "C:\\Projetos\\no-more-jumpscares\\debug",

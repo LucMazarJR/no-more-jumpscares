@@ -36,10 +36,13 @@ except ImportError:  # pragma: no cover - depende do ambiente do usuario
 
 LOG_PATTERN = re.compile(
     r"^\s*(?:(?P<pc>[^|]+?)\s*\|\s*)?Ep\s*(?P<ep>\d+)\s*\|\s*"
+    r"(?:Noite\s*(?P<noite>\d+)\s*\|\s*)?"
     r"(?P<resultado>[A-Za-z_]+)\s*\|\s*Passos:\s*(?P<passos>-?\d+)\s*\|\s*"
     r"(?:(?:Tempo(?:\s+EP)?):\s*(?P<tempo_minutos>-?\d+(?:[.,]\d+)?)\s*min(?:utos)?\s*\|\s*)?"
     r"Recompensa:\s*(?P<recompensa>-?\d+(?:[.,]\d+)?)\s*\|\s*"
     r"Taxa[^:]*:\s*(?P<taxa>-?\d+(?:[.,]\d+)?)%"
+    r"(?:\s*\|\s*Energia\s+fim:\s*(?P<energia_fim>-?\d+(?:[.,]\d+)?)\s*%?)?"
+    r"(?:\s*\|\s*Causa:\s*(?P<causa>[A-Za-z_]+))?"
     r"(?:\s*\|\s*Ocorrido:\s*(?P<ocorrido>.+?))?\s*$",
     re.IGNORECASE,
 )
@@ -286,6 +289,14 @@ def ler_log_treino(caminho: Path) -> tuple[list[dict[str, Any]], str | None]:
             tempo_minutos = match.group("tempo_minutos")
             if tempo_minutos is not None:
                 registro["tempo_ep_minutos"] = float(tempo_minutos.replace(",", "."))
+
+            # Desfecho instrumentado (logs novos): energia no fim + tipo (skill vs. sorte).
+            energia_fim = match.group("energia_fim")
+            if energia_fim is not None:
+                registro["energia_fim"] = float(energia_fim.replace(",", "."))
+            causa = match.group("causa")
+            if causa:
+                registro["causa"] = causa.lower()
 
             if pc_linha:
                 registro["pc"] = pc_linha
