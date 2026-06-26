@@ -24,6 +24,25 @@ def linear(inicio: float, fim: float = 0.0):
     `inicio` (começo do treino) a `fim` (fim). Usado p/ o learning_rate decair."""
     return lambda progresso_restante: fim + (inicio - fim) * progresso_restante
 
+
+def _vecnormalize_do_checkpoint(carregar_modelo: str) -> str | None:
+    """Deriva o vecnormalize salvo JUNTO de um checkpoint (save_vecnormalize=True). O
+    CheckpointCallback nomeia:
+        modelo  = {prefix}_{N}_steps.zip
+        vecnorm = {prefix}_vecnormalize_{N}_steps.pkl
+    Retorna o caminho do .pkl se existir (par modelo+normalizacao casado), senão None — aí o
+    chamador cai no vecnormalize global. Sem isso, voltar um checkpoint antigo usava a
+    normalizacao do FIM do treino (desalinhada com aquele modelo)."""
+    import re
+    base = os.path.basename(carregar_modelo)
+    m = re.match(r"^(.+)_(\d+)_steps(?:\.zip)?$", base)
+    if not m:
+        return None
+    prefixo, n = m.group(1), m.group(2)
+    pasta = os.path.dirname(carregar_modelo) or "."
+    candidato = os.path.join(pasta, f"{prefixo}_vecnormalize_{n}_steps.pkl")
+    return candidato if os.path.exists(candidato) else None
+
 def _carregar_env(caminho: str = ".env") -> None:
     if not os.path.exists(caminho):
         return
@@ -151,13 +170,6 @@ class LogCallback(BaseCallback):
                 else 0.0
             )
 
-            # Causa do desfecho (env): separa vitória/morte por gestão de energia vs. por apagão —
-            # quanto da taxa de vitória é skill e quanto é sorte do RNG pós-blackout. Fallback p/
-            # INTERROMPIDO (sem causa) = o próprio resultado em minúsculas.
-            causa = info.get("causa") or resultado.strip().lower()
-            energia_fim = info.get("energia")
-            energia_str = f"{energia_fim:5.1f}%" if energia_fim is not None else "   ?  "
-
             linha = (
                 f"{_env_str_obrigatorio('PC')} | "
                 f"Ep {self.episodio:4d} | "
@@ -166,9 +178,7 @@ class LogCallback(BaseCallback):
                 f"Passos: {info.get('passos', 0):6d} | "
                 f"Tempo: {tempo_ep_minutos:7.2f} min | "
                 f"Recompensa: {self.recompensa_total:8.1f} | "
-                f"Taxa vitória: {taxa_vitoria:.1f}% | "
-                f"Energia fim: {energia_str} | "
-                f"Causa: {causa}"
+                f"Taxa vitória: {taxa_vitoria:.1f}%"
             )
 
             print(linha)
@@ -274,9 +284,16 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     time.sleep(3)
 
     env_base = DummyVecEnv([lambda: FNAFEnv()])
-    if carregar_modelo and os.path.exists(CAMINHO_STATS):
-        print(f"Carregando normalizacao: {CAMINHO_STATS}")
-        env = VecNormalize.load(CAMINHO_STATS, env_base)
+    if carregar_modelo:
+        # Prefere o vecnormalize salvo JUNTO ao checkpoint (save_vecnormalize=True) p/ o par
+        # modelo+normalizacao casar; cai no vecnormalize global se o do checkpoint nao existir
+        # (ex.: retomar o fnaf_ppo_final, ou checkpoints antigos sem o .pkl correspondente).
+        caminho_stats = _vecnormalize_do_checkpoint(carregar_modelo) or CAMINHO_STATS
+        if os.path.exists(caminho_stats):
+            print(f"Carregando normalizacao: {caminho_stats}")
+            env = VecNormalize.load(caminho_stats, env_base)
+        else:
+            env = VecNormalize(env_base, norm_obs=False, norm_reward=True, gamma=GAMMA)
     else:
         env = VecNormalize(env_base, norm_obs=False, norm_reward=True, gamma=GAMMA)
 
@@ -324,6 +341,7 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
         save_freq=10_000,
         save_path=PASTA_MODELOS,
         name_prefix=f"{_env_str_obrigatorio('PC')}_fnaf_ppo",
+        save_vecnormalize=True,   # salva o vecnormalize JUNTO de cada checkpoint (par casado p/ retomar)
         log_callback=log_callback,
     )
     entropia = EntropiaSchedule()  # Decisão 6: decai ent_coef após a taxa de vitória estabilizar

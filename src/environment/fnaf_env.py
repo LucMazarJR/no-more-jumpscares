@@ -337,18 +337,6 @@ class FNAFEnv(gym.Env):
         import pygetwindow as gw
         return bool(gw.getWindowsWithTitle(WINDOW_TITLE))
 
-    def _esperar_janela(self, timeout: float, intervalo: float = 0.5) -> bool:
-        """Sonda a janela do jogo até ela aparecer ou estourar o timeout. Substitui o sleep
-        fixo do fallback: o jogo às vezes demora mais que REABRIR_ESPERA_SEGUNDOS para mostrar
-        a janela, e a checagem única derrubava o fallback com "janela nao encontrada" mesmo
-        quando o jogo estava só lento para abrir. Retorna assim que a janela existe."""
-        fim = time.perf_counter() + timeout
-        while time.perf_counter() < fim:
-            if self._janela_do_jogo_aberta():
-                return True
-            time.sleep(intervalo)
-        return self._janela_do_jogo_aberta()
-
     def _camera_aberta_por_template(self) -> bool | None:
         """Verifica estado real da câmera via matchTemplate no indicador 'YOU' do mapa.
         Retorna None se o template não foi carregado."""
@@ -521,11 +509,7 @@ class FNAFEnv(gym.Env):
             return False
 
         print("[FALLBACK] Jogo fechado detectado. Relancando executavel...")
-        # Sonda a janela (até REABRIR_ESPERA_SEGUNDOS, no mínimo 30s) em vez de um sleep fixo:
-        # o jogo costuma demorar para aparecer e o foco único falhava cedo demais.
-        if not self._esperar_janela(max(REABRIR_ESPERA_SEGUNDOS, 30)):
-            print("[FALLBACK] Janela nao encontrada apos relancamento.")
-            return False
+        time.sleep(REABRIR_ESPERA_SEGUNDOS)
 
         if not self.capture.focar_janela(WINDOW_TITLE):
             print("[FALLBACK] Janela nao encontrada apos relancamento.")
@@ -537,14 +521,13 @@ class FNAFEnv(gym.Env):
         print("[FALLBACK] Jogo recolocado em modo janela (ALT+ENTER).")
         return True
 
-    def _interromper_episodio(self, motivo: str, como_morte: bool = False):
-        """Encerra o episódio quando o jogo some no meio da noite e tenta reabri-lo.
-
-        como_morte=True (janela fechada): no FNAF1 só o Golden Freddy FECHA o jogo (os outros
-        mostram Game Over com a janela aberta → caem na detecção de morte normal). Então janela
-        sumida = morte por Golden Freddy → leva RECOMPENSA_MORTE e desfecho "morte" (avança a
-        noite igual a qualquer morte). como_morte=False (falha transitória de captura): neutro
-        (0.0, sem desfecho) — não dá pra afirmar que o jogador morreu."""
+    def _interromper_episodio(self, motivo: str):
+        """Encerra o episódio quando o jogo some no meio da noite e tenta reabri-lo. Conta como
+        DERROTA pra recompensa (RECOMPENSA_MORTE), NÃO 0.0 neutro: o episódio interrompido acumulou
+        o denso de sobrevivência sobre passos que NÃO são gameplay confiável (tela inicial/menu pós-
+        relançamento); pagar 0.0 no terminal deixava esse +denso premiar ficar travado na tela
+        inicial. A flag 'interrompido' (em info) continua separando isso da métrica de vitória/morte
+        real. O próximo reset reancora na Noite 1 (mecânica de noite)."""
         if self._botao_luz_pressionado:
             try:
                 self.capture.soltar_botao(*self._botao_luz_pressionado)
@@ -556,14 +539,8 @@ class FNAFEnv(gym.Env):
         if not recuperado:
             motivo = f"{motivo} (fallback sem sucesso)"
 
-        recompensa = RECOMPENSA_MORTE if como_morte else 0.0
-        if como_morte:
-            # Golden Freddy: o jogo reabre no menu principal → decisão de morte normal no reset.
-            self._resultado_episodio = "morte"
-        else:
-            # Falha de captura: reabrimos o jogo (volta ao menu). Estado incerto → próximo reset
-            # faz New Game, reancorando na Noite 1 (caso raro; se reancora sozinho de qualquer forma).
-            self._primeiro_reset = True
+        recompensa = RECOMPENSA_MORTE
+        self._primeiro_reset = True
 
         info = {
             "passos":       self.passos,
@@ -574,8 +551,8 @@ class FNAFEnv(gym.Env):
             "porta_dir":    self.porta_dir,
             "camera_aberta": self.camera_aberta,
             "camera_ativa": self.camera_ativa,
-            "morreu":       como_morte,
-            "interrompido": not como_morte,
+            "morreu":       False,
+            "interrompido": True,
             "ocorrido":     motivo,
             "noite":        self.noite,
         }
@@ -678,8 +655,7 @@ class FNAFEnv(gym.Env):
         self._atualizar_tempo()
 
         if not self._verificar_e_focar_janela():
-            # Janela fechada no meio da noite = Golden Freddy (crash-jumpscare). Conta como morte.
-            return self._interromper_episodio("janela fechada (Golden Freddy)", como_morte=True)
+            return self._interromper_episodio("janela do jogo nao encontrada")
 
         # ── Verificação de sincronia via template "YOU" do mapa de câmeras ────
         # Checado a cada 3 steps, apenas fora do cooldown (evita falsa correção

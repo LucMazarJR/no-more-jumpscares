@@ -48,7 +48,13 @@
       "Bash(venv/Scripts/python.exe scripts/metricas_treino.py --log __TRACKED_VAR__/fake_treino.log --metodo continue --noite-desejada 4 --janela 10)",
       "Bash(cd \"c:/Projetos/no-more-jumpscares\")",
       "Bash(python -)",
-      "PowerShell(python -m src.utils.testar_recompensa 2>&1)"
+      "PowerShell(python -m src.utils.testar_recompensa 2>&1)",
+      "Bash(venv/Scripts/python.exe -c \"import inspect; from stable_baselines3.common.callbacks import CheckpointCallback as C; sig=inspect.signature\\(C.__init__\\); print\\('params:', list\\(sig.parameters\\)\\); print\\('save_vecnormalize default:', sig.parameters['save_vecnormalize'].default if 'save_vecnormalize' in sig.parameters else 'N/A'\\)\")",
+      "Bash(sed -n '/self.capture.clicar\\(\\\\*RESET_CLICK\\)/,/print\\(\"Reset completo/p')",
+      "Bash(sed -n '/Ação decidida por _preparar_reset/,/print\\(\"Reset completo/p' src/environment/fnaf_env.py)",
+      "Bash(venv/Scripts/python.exe -m py_compile src/agent/train.py)",
+      "Bash(venv/Scripts/python.exe -m py_compile src/environment/fnaf_env.py src/agent/train.py)",
+      "Bash(venv/Scripts/python.exe -m src.utils.testar_noite)"
     ],
     "additionalDirectories": [
       "C:\\Projetos\\no-more-jumpscares\\debug",
