@@ -54,7 +54,9 @@
       "Bash(sed -n '/Ação decidida por _preparar_reset/,/print\\(\"Reset completo/p' src/environment/fnaf_env.py)",
       "Bash(venv/Scripts/python.exe -m py_compile src/agent/train.py)",
       "Bash(venv/Scripts/python.exe -m py_compile src/environment/fnaf_env.py src/agent/train.py)",
-      "Bash(venv/Scripts/python.exe -m src.utils.testar_noite)"
+      "Bash(venv/Scripts/python.exe -m src.utils.testar_noite)",
+      "Bash(sed -n '/print\\(.\\\\[FALLBACK\\\\] Jogo fechado/,/return True/p')",
+      "Bash(sed -n '/print\\(.\\\\[FALLBACK\\\\] Jogo fechado/,/return True/p' src/environment/fnaf_env.py)"
     ],
     "additionalDirectories": [
       "C:\\Projetos\\no-more-jumpscares\\debug",

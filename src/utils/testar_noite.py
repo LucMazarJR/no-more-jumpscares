@@ -39,10 +39,13 @@ def test_vitoria_cap_max_noite():
     assert d("new_game", "vitoria", MAX_NOITE) == ("nenhum", MAX_NOITE)
 
 
-# ── Truncado/None: sem morte detectada = sem menu p/ clicar ──────────────────────────────
-def test_truncado_sem_clique():
-    assert d("continue", None, 4, noite_desejada=2) == ("nenhum", 4)
-    assert d("new_game", None, 3) == ("nenhum", 3)
+# ── Truncado/None: re-clica como morte (restaura auto-correção; antes virava "nenhum") ────
+def test_truncado_reclica_como_morte():
+    # Truncado pode ser um episódio-FANTASMA preso no menu (clique de início falhou pós-crash):
+    # re-clicar é o que tira o agente do menu. Antes virava "nenhum" e ele ficava preso em loop.
+    assert d("new_game", None, 3) == ("new_game", 1)
+    assert d("continue", None, 4, noite_desejada=2) == ("new_game", 1)   # acima da alvo → reescala
+    assert d("continue", None, 2, noite_desejada=4) == ("continue", 2)   # na/abaixo → Continue
 
 
 # ── Morte, modo new_game: sempre volta pra Noite 1 ───────────────────────────────────────
@@ -90,7 +93,7 @@ VITORIA_E_TRUNCADO = [
     test_vitoria_new_game_avanca_sem_clique,
     test_vitoria_continue_avanca_mesmo_na_alvo,
     test_vitoria_cap_max_noite,
-    test_truncado_sem_clique,
+    test_truncado_reclica_como_morte,
 ]
 
 MORTE = [

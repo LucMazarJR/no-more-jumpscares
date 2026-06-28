@@ -145,28 +145,29 @@ def decidir_reset(metodo: str, resultado: str | None, noite_atual: int,
 
     Ações: "new_game" (clica New Game → Noite 1), "continue" (clica Continue → retoma a noite onde
     morreu) e "nenhum" (NÃO clica: o jogo já emendou na próxima noite após a vitória — não há menu).
-    O menu só existe após uma MORTE, então é só aí que se escolhe New Game vs Continue.
 
       • 1º reset da execução → New Game (ancora o save na Noite 1).
       • vitória → "nenhum" (auto-avanço pra próxima noite); vale p/ os dois métodos.
-      • truncado/None → "nenhum" (sem morte detectada = sem menu); mantém a noite.
-      • morte:
+      • morte E truncado/None → re-clica o botão do menu (new_game/continue). O TRUNCADO entra aqui
+        DE PROPÓSITO: um episódio truncado pode ser um FANTASMA preso no menu (o clique de início
+        falhou no timing pós-crash do Golden Freddy) — re-clicar RESTAURA a auto-correção que o
+        reset original tinha (ele sempre clicava). Antes o truncado virava "nenhum" e o agente
+        ficava preso jogando contra o menu, truncando em LOOP. Só a vitória REAL (acima) emenda
+        sem clicar.
           new_game → New Game (Noite 1).
-          continue → mira `noite_desejada`: morte ACIMA da alvo → New Game (reescala do 1);
-                     morte na/abaixo da alvo → Continue (retoma essa noite).
+          continue → mira `noite_desejada`: ACIMA da alvo → New Game (reescala do 1);
+                     na/abaixo da alvo → Continue (retoma essa noite).
     """
     if primeiro_reset:
         return "new_game", 1
     if resultado == "vitoria":
         return "nenhum", min(noite_atual + 1, MAX_NOITE)
-    if resultado != "morte":
-        return "nenhum", noite_atual              # truncado por tempo: sem menu p/ clicar
     if metodo == "new_game":
         return "new_game", 1
     alvo = max(1, min(noite_desejada, MAX_NOITE))
     if noite_atual > alvo:
-        return "new_game", 1                      # morreu acima da alvo → reescala do 1
-    return "continue", noite_atual                # morreu na/abaixo da alvo → retoma a noite
+        return "new_game", 1                      # morreu/truncou acima da alvo → reescala do 1
+    return "continue", noite_atual                # morreu/truncou na/abaixo da alvo → retoma a noite
 STEP_DELAY = _env_float_opcional("FNAF_STEP_DELAY", 0.35)
 SIDE_SWITCH_DELAY = _env_float_opcional("FNAF_SIDE_SWITCH_DELAY", 0.85)
 CAMERA_EXIT_DELAY = _env_float_opcional("FNAF_CAMERA_EXIT_DELAY", 0.65)
