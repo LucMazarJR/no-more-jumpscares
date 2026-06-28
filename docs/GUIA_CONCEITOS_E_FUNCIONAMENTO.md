@@ -426,14 +426,17 @@ basta para este guia.
 
 | Parâmetro | Valor | O que é | Efeito |
 |---|---|---|---|
-| `n_steps` | 2048 | experiências coletadas antes de cada update (≈3 noites) | maior = gradiente mais estável, porém mais lento |
-| `batch_size` | 64 | tamanho do mini-lote dentro do update | menor = updates mais ruidosos |
-| `n_epochs` | 10 | quantas vezes o **mesmo** lote é reusado | maior = extrai mais do lote, **mas arrisca over-otimizar** |
+| `n_steps` | 8192 | experiências coletadas antes de cada update (≈11 noites) | maior = gradiente mais estável, porém mais lento |
+| `batch_size` | 256 | tamanho do mini-lote dentro do update | menor = updates mais ruidosos |
+| `n_epochs` | 4 | quantas vezes o **mesmo** lote é reusado | maior = extrai mais do lote, **mas arrisca over-otimizar** |
+| `target_kl` | 0.03 | corta as épocas se a política andar longe demais | freio extra contra colapso de entropia |
 
-> **Atenção — isto conecta direto com o problema atual (Parte 6):** com `n_steps=2048` ≈ apenas
-> **3 episódios** e `n_epochs=10`, cada lote pequeno e pouco diverso é "espremido" 10 vezes. Isso
-> **super-otimiza** a política para aquelas 3 noites específicas e é um dos motivos de a entropia
-> colapsar cedo. O experimento **E1** (reduzir `n_epochs` para 4) ataca exatamente isso.
+> **Atenção — este é o ponto que motivou o bundle anti-colapso atual:** com a configuração antiga
+> (`n_steps=2048` ≈ **3 episódios**, `n_epochs=10`), cada lote pequeno e pouco diverso era
+> "espremido" 10 vezes — o que **super-otimiza** a política para aquelas 3 noites e foi um dos
+> motivos de a entropia colapsar cedo. Os valores atuais atacam isso por três lados ao mesmo tempo:
+> **mais episódios por lote** (8192 ≈ 11 noites), **menos reuso** (`n_epochs=4`) e um **freio de KL**
+> (`target_kl≈0.03`) que corta as épocas se a política andar longe demais.
 
 ### 5.5 O "freio": clipping, `approx_kl` e `clip_fraction`
 
@@ -517,11 +520,11 @@ ent_coef = "quão forte" é esse empurrão para explorar.
 | `ent_coef` | Efeito |
 |---|---|
 | ≈ 0.0 | converge rápido para uma política fixa — **e às vezes fixa numa ruim** |
-| 0.005–0.02 (faixa do projeto) | explora o suficiente, ainda aprende |
+| 0.01–0.03 (faixa do projeto) | explora o suficiente, ainda aprende |
 | ≥ 0.1 | quase aleatório mesmo depois de muito treino |
 
-> **No projeto:** o `ent_coef` **não é fixo**. Começa em **0.02** e decai até **0.005**, mas só
-> **depois** que o agente começa a vencer (ver 6.4).
+> **No projeto:** o `ent_coef` **não é fixo**. Começa em **0.03** e decai até no mínimo **0.01**,
+> mas só **depois** que o agente vence com folga (ver 6.4).
 
 ### 6.4 O `EntropiaSchedule` e o conceito de "gate"
 
@@ -530,21 +533,21 @@ A ideia do projeto: manter a exploração **alta enquanto o agente ainda não ve
 **gate** (portão):
 
 ```text
-SE a taxa de vitória (janela de 50 episódios) cruzar 0.20 (20%):
-    abre o gate → começa a decair ent_coef de 0.02 → 0.005
+SE a taxa de vitória (janela de 50 episódios) cruzar 0.40 (40%):
+    abre o gate → começa a decair ent_coef de 0.03 → 0.01
 SENÃO:
-    mantém ent_coef = 0.02 (continua explorando)
+    mantém ent_coef = 0.03 (continua explorando)
 
 O gate abre uma vez e não fecha. Nunca vai a zero (zero = congela a política).
 ```
 
 > **Onde no código:** classe `EntropiaSchedule` em [train.py:210](../src/agent/train.py#L210).
 
-> **Atenção (o problema que diagnosticamos):** o gate abre em **20%**. Mas 20% é exatamente o valor
-> do **ótimo local** em que o agente fica preso (vence a Noite 1, morre na Noite 2). Ou seja, o
-> schedule começa a **matar a exploração no exato momento em que o agente alcança a armadilha** —
-> ajudando a cravá-lo nela. O experimento **E2** propõe subir esse gate para uma competência acima
-> do ótimo local (ex.: 40%).
+> **Atenção (o problema que diagnosticamos — e a correção aplicada):** o gate **era** 20%. Mas 20%
+> é exatamente o valor do **ótimo local** em que o agente fica preso (vence a Noite 1, morre na
+> Noite 2). Ou seja, o schedule começava a **matar a exploração no exato momento em que o agente
+> alcançava a armadilha**, ajudando a cravá-lo nela. Por isso o gate foi **subido para 40%**: o
+> decaimento só abre quando o agente já vence com folga, bem acima do ótimo local.
 
 ### 6.5 Colapso de entropia, convergência prematura e ótimo local
 
@@ -846,12 +849,32 @@ Rodar: `venv\Scripts\tensorboard.exe --logdir logs` e abrir http://localhost:600
 | `train/explained_variance` | quão bem o crítico prevê o retorno (perto de 1 = bom) |
 | `custom/ent_coef` | **(novo)** o coeficiente de entropia atual do schedule |
 | `custom/win_rate_50` | **(novo)** taxa de vitória na janela de 50 (a que o gate usa) |
+| `custom/noite_{n}/win_rate` | **(novo)** taxa de vitória **por noite** (janela de 30) |
+| `custom/noite_{n}/sobrevivencia_s` | **(novo)** segundos sobrevividos médios **por noite** — a métrica de progresso na noite que você está "encarando" |
+| `custom/noite_{n}/n_eps` | **(novo)** quantos episódios daquela noite há na janela (mostra a fome de amostra) |
+| `custom/curriculo/noite1_dominada` | **(novo)** 1 = Noite 1 dominada (≥60%) → hora de considerar o `continue` |
+
+### 12.3 Decidir quando trocar `new_game` → `continue` (currículo)
+
+O `win_rate` agregado **engana** essa decisão: junta muitas vitórias de Noite 1 com poucas mortes de
+Noite 2 num número só. Use as métricas **por noite**:
+
+```text
+Noite 1 dominada?   custom/noite_1/win_rate  alto e estável  (>= 60%)  → ative o continue
+Noite 2 aprendendo? custom/noite_2/sobrevivencia_s  subindo ao longo do tempo
+Fome de amostra?    custom/noite_2/n_eps  baixo  → você quase não vê a Noite 2 em new_game
+```
+
+> **Atenção:** ao trocar para `continue`, a **taxa de vitória cai** (o agente passa a morrer muito na
+> Noite 2). Isso é **esperado**, não é regressão. Na fase de currículo, a métrica certa é
+> `custom/noite_2/sobrevivencia_s` **subindo**, não o win_rate. O treino também imprime um resumo
+> `[POR NOITE]` no terminal a cada 20 episódios, com o veredito "Noite 1 dominada: SIM/NÃO".
 
 > **As duas métricas `custom/` foram adicionadas nesta sessão** (em `EntropiaSchedule._on_rollout_end`,
 > [train.py](../src/agent/train.py)) justamente para parar de reconstruir a entropia "de cabeça" e
 > ver o colapso direto.
 
-### 12.3 Regra de ouro
+### 12.4 Regra de ouro
 
 **Meça por taxa de vitória e tempo de sobrevivência, nunca pela recompensa crua.** E sempre salve o
 modelo de controle (`modelos/*.zip` + `vecnormalize.pkl`) **antes** de um experimento.

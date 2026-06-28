@@ -8,17 +8,19 @@ o que os logs estão mostrando e prever o efeito de qualquer ajuste.
 > o guia didático **[GUIA_CONCEITOS_E_FUNCIONAMENTO.md](GUIA_CONCEITOS_E_FUNCIONAMENTO.md)**. Este
 > aqui é de **consulta rápida** de hiperparâmetros.
 >
-> **Valores atuais (fonte: código):** `gamma=0.997`, `ent_coef` 0.02→0.005 (via `EntropiaSchedule`,
-> gateado em 20% de vitória), `learning_rate` linear 3e-4→3e-5, `n_steps=2048`, `batch_size=64`,
-> `n_epochs=10`. Onde uma seção abaixo citar um valor antigo no exemplo, o **valor atual prevalece**.
+> **Valores atuais (fonte: código — bundle anti-colapso):** `gamma=0.997`, `n_steps=8192`,
+> `batch_size=256`, `n_epochs=4`, `target_kl=0.03`, `learning_rate` linear 3e-4→3e-5, e `ent_coef`
+> 0.03→0.01 via `EntropiaSchedule` (gate em **40%** de vitória). Todos sobrescrevíveis por env var
+> (`FNAF_N_STEPS`, `FNAF_BATCH_SIZE`, `FNAF_N_EPOCHS`, `FNAF_TARGET_KL`, `FNAF_ENT_INICIO/FIM/GATE`).
+> Onde uma seção abaixo citar um valor antigo no exemplo, o **valor atual prevalece**.
 
 ---
 
 ## Coeficiente de entropia (`ent_coef`)
 
-**Valor atual:** `0.02` inicial, decaindo até `0.005` via `EntropiaSchedule` — o decaimento só
-começa **depois** que a taxa de vitória (janela de 50 episódios) cruza 20% (o "gate"). Nunca vai a
-zero. (O `0.01` fixo abaixo é o valor antigo; a explicação do conceito segue válida.)
+**Valor atual:** `0.03` inicial, decaindo até `0.01` via `EntropiaSchedule` — o decaimento só
+começa **depois** que a taxa de vitória (janela de 50 episódios) cruza **40%** (o "gate"). Nunca vai
+a zero. (Os exemplos abaixo usam o antigo `0.01` fixo; a explicação do conceito segue válida.)
 
 ### O que é
 
@@ -133,13 +135,13 @@ entre 0.993 e 0.997 são razoáveis.
 
 ## Passos por atualização (`n_steps`)
 
-**Valor atual:** `2048`
+**Valor atual:** `8192` (era `2048` — bundle anti-colapso)
 
 ### O que é
 
 O PPO coleta exatamente `n_steps` de experiência (pares estado-ação-recompensa)
 antes de fazer uma atualização da política. Com episódios de ~560–700 steps,
-`n_steps=2048` equivale a ver aproximadamente **3–4 episódios completos** antes
+`n_steps=8192` (atual) equivale a ver aproximadamente **~11 episódios completos** antes
 de cada update.
 
 ### Efeito nos gradientes
@@ -161,7 +163,7 @@ para estabilizar os gradientes sem alterar outros parâmetros.
 
 ## Épocas por atualização (`n_epochs`)
 
-**Valor atual:** `10`
+**Valor atual:** `4` (era `10` — bundle anti-colapso)
 
 ### O que é
 
@@ -178,8 +180,10 @@ o risco de over-fitting ao batch atual — a política muda demais em relação 
 foi coletado, e o clip começa a rejeitar uma fração grande dos updates (visível
 no log de `approx_kl` ou `clip_fraction` do tensorboard).
 
-Para este projeto, 10 é padrão e não precisa ser alterado a menos que o tensorboard
-mostre `clip_fraction > 0.3` sistematicamente.
+Para este projeto, o valor foi **reduzido de 10 para 4** (bundle anti-colapso): com lotes pequenos
+e pouco diversos, reusar 10× super-otimizava a política e colapsava a entropia cedo. Combinado com
+`n_steps` maior e `target_kl`, o decaimento da entropia fica mais lento e saudável. Monitore
+`clip_fraction` e `approx_kl` no tensorboard ao ajustar.
 
 ---
 
