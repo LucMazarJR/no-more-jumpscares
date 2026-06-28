@@ -64,6 +64,11 @@ _carregar_env()
 # (PPO), que é o CONTROLE do A/B. Trocar SÓ isso entre o controle e a LSTM.
 USAR_LSTM = os.getenv("FNAF_USAR_LSTM", "0").strip() == "1"
 
+# E1 (experimento de exploração, disciplina A/B): nº de épocas do PPO por rollout. Reusar muito
+# (10) um lote de poucas trajetórias (~3 noites) super-otimiza e colapsa a entropia cedo. Default
+# 10 = baseline (comportamento atual, no-op). Setar FNAF_N_EPOCHS=4 no .env pra rodar o E1.
+N_EPOCHS = max(1, int(os.getenv("FNAF_N_EPOCHS", "10").strip()))
+
 
 def _env_str_obrigatorio(nome: str) -> str:
     valor = os.getenv(nome)
@@ -244,6 +249,15 @@ class EntropiaSchedule(BaseCallback):
             self.model.ent_coef = self.inicio + (self.fim - self.inicio) * frac
         return True
 
+    def _on_rollout_end(self) -> None:
+        # Instrumentação (Parte 0): expõe no tensorboard o que antes só dava pra reconstruir
+        # de cabeça. win_rate_50 é a MESMA janela que o gate usa (rolling-50, não a cumulativa
+        # do treino.log, que achata por construção). A entropia CRUA da política sai derivada
+        # no tensorboard: H = -train/entropy_loss / custom/ent_coef.
+        taxa = (sum(self.resultados) / len(self.resultados)) if self.resultados else 0.0
+        self.logger.record("custom/ent_coef", float(self.model.ent_coef))
+        self.logger.record("custom/win_rate_50", taxa)
+
 
 class CheckpointComLog(CheckpointCallback):
     """CheckpointCallback que ANUNCIA cada checkpoint no terminal com o contexto do treino
@@ -317,7 +331,7 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
             learning_rate=linear(3e-4, 3e-5),  # Decisão 6: decai 3e-4 → 3e-5 (piso p/ retomada)
             n_steps=2048,
             batch_size=64,
-            n_epochs=10,
+            n_epochs=N_EPOCHS,                 # E1: FNAF_N_EPOCHS (default 10 = baseline)
             gamma=GAMMA,
             ent_coef=0.02,                     # Decisão 6: começa alto; EntropiaSchedule decai depois
             verbose=0,
@@ -333,6 +347,11 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
                 transferir_pesos(modelo, bc_path)
             else:
                 print(f"[BC warmstart] caminho não encontrado, ignorando: {bc_path}")
+
+    # E1/A-B: o env var sempre vence — vale também ao RETOMAR (load restaura o n_epochs salvo no
+    # checkpoint). Default 10 = no-op. Assim FNAF_N_EPOCHS controla o experimento em qualquer caso.
+    modelo.n_epochs = N_EPOCHS
+    print(f"n_epochs = {N_EPOCHS}" + ("  [E1 ativo]" if N_EPOCHS != 10 else "  (baseline)"))
 
     # log_callback ANTES do checkpoint na lista: assim, no step do save, o contador de episódio
     # já está atualizado quando CheckpointComLog imprime o contexto.

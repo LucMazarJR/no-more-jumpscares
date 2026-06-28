@@ -229,3 +229,5 @@ dados/
 # Configuracao local do Claude Code — pessoal de cada maquina (caminhos
 # absolutos, allowlist de permissoes). Nao deve ser compartilhada.
 .claude/settings.local.json
+
+backups/
