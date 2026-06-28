@@ -4,11 +4,21 @@ Este documento descreve os principais parâmetros e conceitos que afetam o
 comportamento do treinamento. O objetivo é servir de guia para interpretar
 o que os logs estão mostrando e prever o efeito de qualquer ajuste.
 
+> **Para aprender os conceitos do zero** (o que é entropia, epoch, política, recompensa, etc.) veja
+> o guia didático **[GUIA_CONCEITOS_E_FUNCIONAMENTO.md](GUIA_CONCEITOS_E_FUNCIONAMENTO.md)**. Este
+> aqui é de **consulta rápida** de hiperparâmetros.
+>
+> **Valores atuais (fonte: código):** `gamma=0.997`, `ent_coef` 0.02→0.005 (via `EntropiaSchedule`,
+> gateado em 20% de vitória), `learning_rate` linear 3e-4→3e-5, `n_steps=2048`, `batch_size=64`,
+> `n_epochs=10`. Onde uma seção abaixo citar um valor antigo no exemplo, o **valor atual prevalece**.
+
 ---
 
 ## Coeficiente de entropia (`ent_coef`)
 
-**Valor atual:** `0.01`
+**Valor atual:** `0.02` inicial, decaindo até `0.005` via `EntropiaSchedule` — o decaimento só
+começa **depois** que a taxa de vitória (janela de 50 episódios) cruza 20% (o "gate"). Nunca vai a
+zero. (O `0.01` fixo abaixo é o valor antigo; a explicação do conceito segue válida.)
 
 ### O que é
 
@@ -74,7 +84,7 @@ aprendido.
 
 ## Fator de desconto (`gamma`)
 
-**Valor atual:** `0.995`
+**Valor atual:** `0.997` (era `0.995` — atualizado na Decisão 6; horizonte efetivo ~333 steps).
 
 ### O que é
 
