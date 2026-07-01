@@ -1,15 +1,16 @@
 import json
+import random
+from collections import Counter, defaultdict
+
 import numpy as np
 import cv2
 import torch
-import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset, WeightedRandomSampler
 from stable_baselines3 import PPO
-from src.environment.fnaf_env import FNAFEnv, MAX_NOITE
+from src.environment.fnaf_env import FNAFEnv, MAX_NOITE, ACOES, FOXY_SATURACAO_S
 from src.agent.multimodal_policy import MultimodalExtractor
 from pathlib import Path
-from collections import Counter
 
 NUM_ACOES = 17
 
@@ -35,6 +36,16 @@ class GameplayDataset(Dataset):
                   f"— campos ausentes usarão valores neutros (estados=zeros, energia=100).")
             print("  Use a versão atualizada de gravar_gameplay.py para novos datasets.\n")
 
+        # Campos NOVOS do gravador corrigido. Sem eles o BC ensina errado: sem "noite" tudo
+        # vira Noite 1 (a política aprende a IGNORAR a dificuldade); sem "tempo_sem_camera"
+        # o 12º estado fica 0 no BC e ativo no RL (distribuições divergem). Regrave.
+        for campo in ("noite", "tempo_sem_camera", "ameaca_esq"):
+            faltando = sum(1 for d in self.dados if campo not in d)
+            if faltando:
+                pct = faltando / len(self.dados) * 100
+                print(f"[AVISO] {faltando} frames ({pct:.1f}%) sem '{campo}' — dataset ANTIGO. "
+                      f"Regrave com: python -m src.utils.gravar_gameplay --noite N")
+
         contagem = Counter(d["nome"] for d in self.dados)
         print("\nDistribuição de ações:")
         for nome, qtd in contagem.most_common():
@@ -52,11 +63,10 @@ class GameplayDataset(Dataset):
             frame = np.zeros((84, 84), dtype=np.uint8)
         frame = np.expand_dims(frame, axis=-1)  # (84, 84, 1)
 
-        # 10 estados normalizados — espelha FNAFEnv._capturar_observacao().
+        # 12 estados normalizados — espelha FNAFEnv._capturar_observacao().
         # Datasets antigos sem os campos de estado usam valores neutros:
-        # energia=100 (cheio), tempo=0 (início), demais=0 (inativo). A ameaça
-        # (Decisão 4A) não é gravada e o frame salvo é 84x84 (pequeno p/ o template
-        # 1280x720), então fica neutra=0 no BC; o RL a computa ao vivo.
+        # energia=100 (cheio), tempo=0 (início), demais=0 (inativo). Divisores
+        # importados do env (fonte única) — se o env mudar, o BC acompanha.
         estados = np.array([
             float(dado.get("porta_esq", 0)),
             float(dado.get("porta_dir", 0)),
@@ -68,11 +78,12 @@ class GameplayDataset(Dataset):
             min(float(dado.get("tempo_ep", 0)) / 535.0, 1.0),
             float(dado.get("ameaca_esq", 0)),
             float(dado.get("ameaca_dir", 0)),
-            float(dado.get("noite", 1)) / MAX_NOITE,   # Decisão 7; datasets antigos → noite 1
+            float(dado.get("noite", 1)) / MAX_NOITE,
+            min(float(dado.get("tempo_sem_camera", 0.0)) / FOXY_SATURACAO_S, 1.0),  # 12º
         ], dtype=np.float32)
 
         acao = int(dado["acao"])
-        
+
         obs = {
             "imagem": torch.ByteTensor(frame),
             "estados": torch.FloatTensor(estados)
@@ -80,19 +91,85 @@ class GameplayDataset(Dataset):
         return obs, torch.LongTensor([acao])[0]
 
 
-def treinar_bc(caminhos_json: list[str], epochs: int = 50, lr: float = 1e-3):
+def _split_estratificado(dataset: GameplayDataset, frac_val: float = 0.10, seed: int = 42):
+    """Separa 10% p/ validação POR CLASSE (senão as ações raras — portas — caem todas
+    no treino e o recall de validação delas fica indefinido). Classes com < 2 exemplos
+    ficam inteiras no treino."""
+    por_classe: dict[int, list[int]] = defaultdict(list)
+    for i, d in enumerate(dataset.dados):
+        por_classe[int(d["acao"])].append(i)
+
+    rng = random.Random(seed)
+    treino, val = [], []
+    for indices in por_classe.values():
+        rng.shuffle(indices)
+        n_val = int(len(indices) * frac_val) if len(indices) >= 2 else 0
+        val.extend(indices[:n_val])
+        treino.extend(indices[n_val:])
+    return treino, val
+
+
+def _sampler_balanceado(dataset: GameplayDataset, indices: list[int]) -> WeightedRandomSampler:
+    """Peso 1/freq(classe), CAPADO em 10× a mediana dos pesos de classe: o oceano de
+    "nada" deixa de afogar as ações raras (portas), sem descartar dados nem deixar uma
+    classe de 3 exemplos dominar o gradiente (o cap segura o extremo)."""
+    contagem = Counter(int(dataset.dados[i]["acao"]) for i in indices)
+    peso_classe = {c: 1.0 / n for c, n in contagem.items()}
+    cap = 10.0 * float(np.median(list(peso_classe.values())))
+    peso_classe = {c: min(w, cap) for c, w in peso_classe.items()}
+    pesos = [peso_classe[int(dataset.dados[i]["acao"])] for i in indices]
+    return WeightedRandomSampler(pesos, num_samples=len(indices), replacement=True)
+
+
+@torch.no_grad()
+def _avaliar(policy, loader, device) -> tuple[float, float, dict[int, float]]:
+    """(top-1, macro-recall, recall por classe) no conjunto de validação, com argmax
+    determinístico — mede o que a política FARIA, não a probabilidade média."""
+    certos_por_classe: Counter = Counter()
+    total_por_classe:  Counter = Counter()
+    certos = total = 0
+    for obs_batch, acoes in loader:
+        obs_device = {
+            "imagem": obs_batch["imagem"].to(device),
+            "estados": obs_batch["estados"].to(device),
+        }
+        acoes = acoes.to(device)
+        dist = policy.get_distribution(obs_device)
+        pred = dist.distribution.probs.argmax(dim=1)
+        certos += int((pred == acoes).sum().item())
+        total += len(acoes)
+        for a, p in zip(acoes.tolist(), pred.tolist()):
+            total_por_classe[a] += 1
+            if a == p:
+                certos_por_classe[a] += 1
+
+    recall = {c: certos_por_classe[c] / n for c, n in total_por_classe.items()}
+    top1 = certos / total if total else 0.0
+    macro = sum(recall.values()) / len(recall) if recall else 0.0
+    return top1, macro, recall
+
+
+def treinar_bc(caminhos_json: list[str], epochs: int = 200, lr: float = 1e-3,
+               paciencia: int = 15):
     print("=== Behavioral Cloning ===\n")
 
     dataset = GameplayDataset(caminhos_json)
-    loader  = DataLoader(dataset, batch_size=32, shuffle=True)
+    idx_treino, idx_val = _split_estratificado(dataset)
+    print(f"\nSplit estratificado: {len(idx_treino)} treino / {len(idx_val)} validação")
+
+    loader = DataLoader(
+        Subset(dataset, idx_treino), batch_size=32,
+        sampler=_sampler_balanceado(dataset, idx_treino),   # balanceado (sem shuffle)
+    )
+    loader_val = DataLoader(Subset(dataset, idx_val), batch_size=64)
 
     print("\nCriando modelo PPO com arquitetura multimodal...")
     env = FNAFEnv()
-    
+
     policy_kwargs = dict(
         features_extractor_class=MultimodalExtractor,
     )
-    
+
     modelo = PPO(
         policy="MultiInputPolicy",
         env=env,
@@ -105,7 +182,12 @@ def treinar_bc(caminhos_json: list[str], epochs: int = 50, lr: float = 1e-3):
     policy    = modelo.policy
     optimizer = optim.Adam(policy.parameters(), lr=lr)
 
-    print(f"\nTreinando por {epochs} épocas...\n")
+    print(f"\nTreinando por até {epochs} épocas (early stop: {paciencia} sem melhora "
+          f"no macro-recall da validação)...\n")
+
+    melhor_macro = -1.0
+    melhor_estado = None
+    sem_melhora = 0
 
     for epoch in range(epochs):
         total_loss  = 0
@@ -136,11 +218,34 @@ def treinar_bc(caminhos_json: list[str], epochs: int = 50, lr: float = 1e-3):
                 total       += len(acoes)
 
         acuracia = total_certo / total * 100
-        print(f"Época {epoch+1:3d}/{epochs} | Loss: {total_loss/len(loader):.4f} | Acurácia: {acuracia:.1f}%")
+        top1_val, macro_val, recall = _avaliar(policy, loader_val, modelo.device)
+        print(f"Época {epoch+1:3d}/{epochs} | Loss: {total_loss/len(loader):.4f} | "
+              f"Acurácia treino: {acuracia:.1f}% | Val top-1: {top1_val*100:.1f}% | "
+              f"Val macro-recall: {macro_val*100:.1f}%")
+
+        if macro_val > melhor_macro:
+            melhor_macro = macro_val
+            melhor_estado = {k: v.detach().cpu().clone() for k, v in policy.state_dict().items()}
+            sem_melhora = 0
+            print("  Recall por classe (validação):")
+            for c in sorted(recall):
+                print(f"    {ACOES.get(c, c):<20} {recall[c]*100:5.1f}%")
+        else:
+            sem_melhora += 1
+            if sem_melhora >= paciencia:
+                print(f"\nEarly stop: {paciencia} épocas sem melhora no macro-recall.")
+                break
+
+    # O checkpoint salvo é o MELHOR da validação, não o último (o fim do treino já
+    # está memorizando o conjunto de treino — macro-recall do val é o critério).
+    if melhor_estado is not None:
+        policy.load_state_dict(melhor_estado)
+    print(f"\nMelhor macro-recall (validação): {melhor_macro*100:.1f}%")
+    print("Critérios de aceite (plano): portas >= 60%, câmera >= 50%, luzes >= 40%, top-1 >= 70%.")
 
     caminho_saida = "modelos/fnaf_bc.zip"
     modelo.save(caminho_saida)
-    print(f"\nModelo BC salvo em: {caminho_saida}")
+    print(f"Modelo BC salvo em: {caminho_saida}")
 
     env.close()
     return modelo
@@ -182,6 +287,4 @@ if __name__ == "__main__":
     ], epochs=200)
 
     print("\nPronto! Para usar o BC como ponto de partida do PPO:")
-    print("  1. Deixe modelos/fnaf_bc.zip como o modelo mais recente da pasta modelos/")
-    print("     (ou mova os outros .zip para um backup)")
-    print("  2. Rode: python main.py treino")
+    print("  Rode: python main.py treino --novo --bc modelos/fnaf_bc.zip")

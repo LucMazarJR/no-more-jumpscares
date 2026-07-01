@@ -261,7 +261,9 @@ RECOMPENSA_NOITE      = 60.0   # orçamento denso de uma noite inteira (Σ ≈ 6
 BONUS_MARCO_HORA      = 3.0    # marco por hora alcançada (flat, SEM peso de energia): 6×3 = 18
 PESO_AMEACA_BLOQUEADA = 0.5    # Φ: +0.5 por lado com ameaça PRESENTE e porta FECHADA
 PESO_FOXY             = 0.5    # Φ: penaliza câmera negligenciada (proxy do Foxy), só após PACIENCIA
-FOXY_PACIENCIA        = 20     # steps sem câmera tolerados antes de o risco do Foxy subir no Φ
+FOXY_PACIENCIA_S      = 14.0   # segundos REAIS sem câmera tolerados antes de o risco do Foxy subir no Φ
+                               # (~20 steps × 0.7s; wall-clock igual a energia/tempo — steps variam de duração)
+FOXY_SATURACAO_S      = 28.0   # 2× a paciência — normaliza o 12º estado tempo_sem_camera (satura em 1.0)
 
 
 class FNAFEnv(gym.Env):
@@ -285,8 +287,8 @@ class FNAFEnv(gym.Env):
             ),
             "estados": spaces.Box(
                 low=0, high=1,
-                shape=(11,),                 # +1 = noite (Decisão 7)
-                dtype=np.float32
+                shape=(12,),                 # 11 (Decisão 7: +noite) +1 = tempo_sem_camera
+                dtype=np.float32             # (risco do Foxy OBSERVÁVEL — o Φ cobra essa grandeza)
             )
         })
         self.action_space = spaces.Discrete(len(ACOES))
@@ -310,7 +312,7 @@ class FNAFEnv(gym.Env):
         self.episode_start_time = None
         self._t_ultima_energia = None
         self._dt_step                 = 0.7  # Δt do step (recalculado em _atualizar_energia)
-        self.passos_sem_camera        = 0
+        self._t_ultima_camera         = None  # última vez (perf_counter) com a câmera aberta — 12º estado
         self._botao_luz_pressionado   = None
         self.cooldown_porta_esq       = 0  # só bloqueia porta (animação ~0.6s)
         self.cooldown_porta_dir       = 0  # só bloqueia porta (animação ~0.6s)
@@ -332,6 +334,9 @@ class FNAFEnv(gym.Env):
         # Noite (Decisão 7) — rastreada internamente pelo desfecho do episódio anterior.
         # NÃO é zerada no reset() (persiste entre episódios; só a transição abaixo a muda).
         self.noite = 1
+        # Alvo do currículo (modo continue). Atributo de INSTÂNCIA para o CurriculumCallback
+        # promover em runtime via set_attr — o .env dá só o valor INICIAL.
+        self.noite_desejada = NOITE_DESEJADA
         self._resultado_episodio = None   # "vitoria" | "morte" | None (interrompido/truncado)
         self._primeiro_reset = True       # 1º reset da execução ancora o save na Noite 1 (New Game)
         self._acao_reset = "new_game"     # ação ("new_game"|"continue"|"nenhum") decidida por _preparar_reset
@@ -561,9 +566,13 @@ class FNAFEnv(gym.Env):
             "camera_aberta": self.camera_aberta,
             "camera_ativa": self.camera_ativa,
             "morreu":       como_morte,
+            "vitoria":      False,
             "interrompido": not como_morte,
             "ocorrido":     motivo,
             "noite":        self.noite,
+            # Golden Freddy (janela fechada) é morte real com causa própria; glitch de captura
+            # fica "interrompido" (fora da métrica de skill, igual ao rótulo do LogCallback).
+            "causa":        "morte_golden" if como_morte else "interrompido",
         }
 
         observacao = {
@@ -579,7 +588,7 @@ class FNAFEnv(gym.Env):
         flag de 1º reset (que força New Game) e o resultado do episódio. Testável offline."""
         self._acao_reset, self.noite = decidir_reset(
             RESET_METODO, self._resultado_episodio, self.noite,
-            NOITE_DESEJADA, self._primeiro_reset,
+            self.noite_desejada, self._primeiro_reset,
         )
         self._primeiro_reset = False
         self._resultado_episodio = None
@@ -614,7 +623,7 @@ class FNAFEnv(gym.Env):
         self._contador_menu    = 0      # debounce da detecção de menu (Decisão 8)
         self._crash_menu       = False
         self.episode_start_time    = None
-        self.passos_sem_camera        = 0
+        self._t_ultima_camera         = None
         self._botao_luz_pressionado   = None
         self.cooldown_porta_esq       = 0
         self.cooldown_porta_dir       = 0
@@ -656,6 +665,7 @@ class FNAFEnv(gym.Env):
             time.sleep(20)
         self.episode_start_time = time.perf_counter()
         self._t_ultima_energia  = self.episode_start_time
+        self._t_ultima_camera   = self.episode_start_time  # noite começa "recém-checada" (risco Foxy 0)
 
         print("Reset completo — noite iniciada!")
         observacao = self._capturar_observacao()
@@ -776,9 +786,7 @@ class FNAFEnv(gym.Env):
         self._atualizar_cooldowns()
 
         if self.camera_aberta:
-            self.passos_sem_camera = 0
-        else:
-            self.passos_sem_camera += 1
+            self._t_ultima_camera = time.perf_counter()
 
         recompensa = self._calcular_recompensa(morreu, sobreviveu, acao, acao_valida)
         terminado  = morreu or sobreviveu
@@ -809,6 +817,8 @@ class FNAFEnv(gym.Env):
             "porta_dir":      self.porta_dir,
             "camera_aberta":  self.camera_aberta,
             "camera_ativa":   self.camera_ativa,
+            "ameaca_esq":     self.ameaca_esq,
+            "ameaca_dir":     self.ameaca_dir,
             "morreu":         morreu,
             "vitoria":        sobreviveu,   # 6AM REAL (terminal). Truncamento (700s) NÃO é vitória.
             "acao_valida":    acao_valida,
@@ -1023,6 +1033,15 @@ class FNAFEnv(gym.Env):
                 return e0 + frac * (e1 - e0)
         return 5.0
 
+    def _tempo_sem_camera(self) -> float:
+        """Segundos REAIS desde a última vez que a câmera esteve aberta (0 se aberta agora ou
+        antes do 1º uso). É a MESMA grandeza usada pelo risco do Foxy no Φ e exposta como 12º
+        estado da observação — o agente vê exatamente o que o shaping cobra (antes o Φ usava
+        um contador interno invisível, punindo por algo fora da observação)."""
+        if self.camera_aberta or self._t_ultima_camera is None:
+            return 0.0
+        return time.perf_counter() - self._t_ultima_camera
+
     def _potencial_seguranca(self) -> float:
         """Φ(estado) do shaping potential-based (Ng, Harada & Russell 1999): o treino recompensa
         só a variação γ·Φ(depois)−Φ(antes) (somada em step()), que telescopa ao longo do episódio
@@ -1030,7 +1049,7 @@ class FNAFEnv(gym.Env):
         Φ mede "quão segura é a situação AGORA":
           • +PESO_AMEACA_BLOQUEADA por lado com ameaça PRESENTE e porta FECHADA (lidou com ela);
             0 se exposta (porta aberta) ou sem ameaça — não premia fechar porta à toa.
-          • −PESO_FOXY conforme a câmera é negligenciada ALÉM de FOXY_PACIENCIA (proxy do Foxy, que
+          • −PESO_FOXY conforme a câmera é negligenciada ALÉM de FOXY_PACIENCIA_S (proxy do Foxy, que
             corre quanto menos se olha as câmeras). Por ser potential-based, checar a câmera sobe Φ
             e negligenciar baixa, e isso telescopa: NÃO há ganho líquido em acampar (≠ da antiga
             penalidade unilateral, que só punia NÃO-checar → viciava em ficar na câmera). Abaixo da
@@ -1041,8 +1060,8 @@ class FNAFEnv(gym.Env):
             phi += PESO_AMEACA_BLOQUEADA
         if self.ameaca_dir and self.porta_dir:
             phi += PESO_AMEACA_BLOQUEADA
-        excesso_sem_camera = max(0, self.passos_sem_camera - FOXY_PACIENCIA)
-        risco_foxy = min(excesso_sem_camera / FOXY_PACIENCIA, 1.0)
+        excesso_sem_camera = max(0.0, self._tempo_sem_camera() - FOXY_PACIENCIA_S)
+        risco_foxy = min(excesso_sem_camera / FOXY_PACIENCIA_S, 1.0)
         phi -= PESO_FOXY * risco_foxy
         return phi
 
@@ -1110,6 +1129,7 @@ class FNAFEnv(gym.Env):
             float(self.ameaca_esq),
             float(self.ameaca_dir),
             float(self.noite) / MAX_NOITE,        # Decisão 7: dificuldade da noite
+            min(self._tempo_sem_camera() / FOXY_SATURACAO_S, 1.0),  # 12º: risco Foxy observável
         ], dtype=np.float32)
 
         return {"imagem": frame, "estados": estados}

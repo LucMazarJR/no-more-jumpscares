@@ -23,7 +23,9 @@ class MultimodalExtractor(BaseFeaturesExtractor):
             cnn_output_dim = self.cnn(sample_img).shape[1]
 
         self.fc_estados = nn.Sequential(
-            nn.Linear(11, 32),   # 11 estados (Decisão 7: +noite)
+            # Deriva do espaço (hoje 12: Decisão 7 +noite, +tempo_sem_camera) — nunca hardcodar:
+            # o shape errado aqui só estoura em runtime, bem depois da construção.
+            nn.Linear(observation_space["estados"].shape[0], 32),
             nn.ReLU(),
         )
 

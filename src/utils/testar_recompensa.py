@@ -10,9 +10,11 @@ toda "dica de jogo" so via Phi (telescopa, nao move o otimo).
 Rodar: python -m src.utils.testar_recompensa
 """
 
+import time
+
 from src.environment.fnaf_env import (
     FNAFEnv, ACOES, CHECKPOINTS_NOITE, GAMMA,
-    RECOMPENSA_NOITE, BONUS_MARCO_HORA, FOXY_PACIENCIA,
+    RECOMPENSA_NOITE, BONUS_MARCO_HORA, FOXY_PACIENCIA_S,
 )
 
 NOME_PARA_ACAO = {nome: i for i, nome in ACOES.items()}
@@ -33,7 +35,7 @@ def _novo_env() -> FNAFEnv:
     env.camera_aberta = False
     env.penultima_acao = None
     env.contador_nada = 0
-    env.passos_sem_camera = 0
+    env._t_ultima_camera = None
     env._horas_bonificadas = set()
     env._total_bonus_hora = 0.0
     env.ameaca_esq = False
@@ -42,7 +44,7 @@ def _novo_env() -> FNAFEnv:
 
 
 def recompensa_snapshot(*, energia=70.0, tempo=200.0, porta_esq=False, porta_dir=False,
-                        passos_sem_camera=0, dt=PASSO_DT, acao="nada", morreu=False,
+                        tempo_sem_camera=0.0, dt=PASSO_DT, acao="nada", morreu=False,
                         sobreviveu=False, acao_valida=True, com_bonus=False) -> float:
     # Por padrao suprime o bonus_hora (pre-marca os checkpoints) para isolar o step.
     env = _novo_env()
@@ -53,7 +55,8 @@ def recompensa_snapshot(*, energia=70.0, tempo=200.0, porta_esq=False, porta_dir
     env._dt_step = dt
     env.porta_esq = porta_esq
     env.porta_dir = porta_dir
-    env.passos_sem_camera = passos_sem_camera
+    # O risco do Foxy agora e wall-clock: "t segundos sem camera" = ancora no passado.
+    env._t_ultima_camera = time.perf_counter() - tempo_sem_camera
     return env._calcular_recompensa(morreu, sobreviveu, NOME_PARA_ACAO[acao], acao_valida)
 
 
@@ -73,6 +76,7 @@ def simular(roteiro, *, dt=PASSO_DT, morre_no_fim=False, sobrevive_no_fim=False,
     cd_porta_esq = cd_porta_dir = cd_camera = 0
     prev_acao = None
     retorno = 0.0
+    tempo_sem_camera = 0.0   # relogio VIRTUAL do roteiro (avanca dt por step, zera com camera)
     phi_antes = env._potencial_seguranca() if com_shaping else 0.0
 
     for i, nome in enumerate(roteiro):
@@ -102,7 +106,10 @@ def simular(roteiro, *, dt=PASSO_DT, morre_no_fim=False, sobrevive_no_fim=False,
         elif nome.startswith("camera_"):
             acao_valida = env.camera_aberta
 
-        env.passos_sem_camera = 0 if env.camera_aberta else env.passos_sem_camera + 1
+        # Foxy por tempo real: reproduz o relogio virtual ancorando _t_ultima_camera no passado
+        # (o _tempo_sem_camera() do env le perf_counter; o desvio entre set e leitura e ~us).
+        tempo_sem_camera = 0.0 if env.camera_aberta else tempo_sem_camera + dt
+        env._t_ultima_camera = time.perf_counter() - tempo_sem_camera
 
         env.tempo_jogo += dt
         itens = min(int(env.porta_esq) + int(env.porta_dir) + int(env.camera_aberta), 3)
@@ -135,11 +142,11 @@ def bonus_hora_maximo() -> float:
 
 
 def _phi(*, ameaca_esq=False, porta_esq=False, ameaca_dir=False, porta_dir=False,
-         passos_sem_camera=0) -> float:
+         tempo_sem_camera=0.0) -> float:
     env = _novo_env()
     env.ameaca_esq, env.porta_esq = ameaca_esq, porta_esq
     env.ameaca_dir, env.porta_dir = ameaca_dir, porta_dir
-    env.passos_sem_camera = passos_sem_camera
+    env._t_ultima_camera = time.perf_counter() - tempo_sem_camera
     return env._potencial_seguranca()
 
 
@@ -202,15 +209,17 @@ def test_phi_sem_ameaca_eh_zero():
 
 
 def test_phi_foxy_reduz_seguranca():
-    sem = _phi(passos_sem_camera=0)
-    negligenciado = _phi(passos_sem_camera=FOXY_PACIENCIA * 2)
+    sem = _phi(tempo_sem_camera=0.0)
+    negligenciado = _phi(tempo_sem_camera=FOXY_PACIENCIA_S * 2)
     assert negligenciado < sem
 
 
 def test_phi_foxy_tolera_ate_paciencia():
     # Ate a paciencia, o risco do Foxy e 0 — sem empurrao para a camera no caso comum
     # (e o oposto da antiga penalidade unilateral, que so punia NAO-checar).
-    assert _phi(passos_sem_camera=FOXY_PACIENCIA) == _phi(passos_sem_camera=0)
+    # Margem de 50ms abaixo do limiar: a leitura por perf_counter avanca ~us entre
+    # o set e o calculo, e exatamente NO limiar o teste ficaria flaky.
+    assert _phi(tempo_sem_camera=FOXY_PACIENCIA_S - 0.05) == _phi(tempo_sem_camera=0.0)
 
 
 def test_shaping_telescopa():

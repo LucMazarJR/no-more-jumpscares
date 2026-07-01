@@ -1,13 +1,16 @@
+import json
+import math
 import os
 import sys
 import time
-from collections import deque, defaultdict
+from collections import Counter, deque, defaultdict
+from datetime import datetime
 import keyboard
 from stable_baselines3 import PPO
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from src.environment.fnaf_env import FNAFEnv, GAMMA
+from src.environment.fnaf_env import FNAFEnv, GAMMA, MAX_NOITE, RESET_METODO
 from src.agent.multimodal_policy import MultimodalExtractor
 
 PASTA_MODELOS = "modelos"
@@ -78,31 +81,45 @@ def _env_float(nome: str, padrao: float) -> float:
         return padrao
 
 
-# ── Bundle anti-colapso de entropia ───────────────────────────────────────────────────────────
-# Objetivo: SUSTENTAR a exploração por muito mais tempo, até o agente saber vencer noites avançadas
-# (a Noite 1 é um ótimo local fácil; sem exploração ele nunca amostra a Noite 2+). Os defaults abaixo
-# JÁ SÃO o bundle novo — pensados em conjunto, todos puxando na mesma direção (não são mais o
-# "controle" de A/B). Tudo sobrescrevível por env var no .env.
+# ── Pacote anti-colapso de entropia (BC warmstart + termostato + currículo) ───────────────────
+# Objetivo: SUSTENTAR a exploração até o agente vencer noites avançadas, sem os dois modos de
+# falha já observados: ent_coef fixo alto (0.03 = aleatório demais, morria por apagão) e fixo
+# baixo (0.02 = colapsa); e sem o gate por win_rate, que nunca abria quando o agente estagnava
+# abaixo dele. Tudo sobrescrevível por env var no .env.
 #
-#   n_steps↑ + batch↑ : mais trajetórias diversas por update (~11 noites, não ~3) → vantagens menos
-#                       enviesadas, crítico melhor, menos overfit ao lote → entropia cai mais devagar.
-#                       (Definem o rollout buffer → só valem em treino FRESCO, igual ao gamma.)
-#   n_epochs↓         : menos reuso/super-otimização do MESMO lote por update (10× afiava cedo demais).
-#   target_kl         : freio extra — corta as épocas se a política andar longe demais (protege a entropia).
-#   ent_inicio/fim/gate: piso mais alto (0.01) e GATE mais alto (0.40) — decaimento só abre quando o
-#                       agente JÁ vence com folga. inicio=0.02 (baixado de 0.03 após diagnóstico: a
-#                       0.03 a política ficava aleatória demais p/ CONSERVAR energia — morria sempre
-#                       ~7min por apagão; 0.02 concentra na eficiência sem colapsar. Ainda 2× o antigo).
-N_STEPS    = max(64, _env_int("FNAF_N_STEPS",   8192))
+#   n_steps 4096      : meio-termo — 8192 protegia bem a política INICIAL ruim, mas custava 1
+#                       update a cada ~95min de jogo real; com BC warmstart a política já parte
+#                       decente e a FREQUÊNCIA de updates volta a importar (~48min/update, ~5.4
+#                       noites de diversidade por lote). Contingência p/ aprendizado lento:
+#                       FNAF_N_EPOCHS=6 (o target_kl corta épocas excedentes com segurança).
+#   n_epochs↓ + target_kl: menos reuso/super-otimização do MESMO lote (10× afiava cedo demais);
+#                       o KL corta as épocas se a política andar longe demais.
+#   clip_reward=100   : o default do VecNormalize (10) clipava a vitória (+500 normalizada) no
+#                       MESMO teto de qualquer recompensa — a razão vitória:morte 5:1 do design
+#                       chegava até 1:1 no gradiente. 100 deixa os terminais passarem inteiros.
+#                       (Contingência se train/value_loss explodir: FNAF_CLIP_REWARD=50.)
+#   H alvo (nats)     : o ControladorEntropia rastreia um ALVO de entropia que decai devagar
+#                       (1.5 → 0.75 ≈ 4.5 → 2.1 ações efetivas; uniforme seria ln17 ≈ 2.83),
+#                       ajustando o ent_coef em malha fechada — ver docstring da classe.
+N_STEPS    = max(64, _env_int("FNAF_N_STEPS",   4096))
 BATCH_SIZE = max(8,  _env_int("FNAF_BATCH_SIZE", 256))
 N_EPOCHS   = max(1,  _env_int("FNAF_N_EPOCHS",     4))
 TARGET_KL  = _env_float("FNAF_TARGET_KL",  0.03)
-ENT_INICIO = _env_float("FNAF_ENT_INICIO", 0.02)
-ENT_FIM    = _env_float("FNAF_ENT_FIM",    0.01)
-ENT_GATE   = _env_float("FNAF_ENT_GATE",   0.40)
+CLIP_REWARD = _env_float("FNAF_CLIP_REWARD", 100.0)
+ENT_INICIO = _env_float("FNAF_ENT_INICIO", 0.02)   # valor INICIAL do ent_coef (o controlador assume dali)
+H_INICIO   = _env_float("FNAF_H_INICIO", 1.5)      # alvo de entropia (nats) no começo do treino
+H_FIM      = _env_float("FNAF_H_FIM",    0.75)     # alvo no fim (nunca 0 — congela em política subótima)
+ENT_MIN    = _env_float("FNAF_ENT_MIN",  0.003)    # piso do ent_coef
+ENT_MAX    = _env_float("FNAF_ENT_MAX",  0.03)     # teto: 0.03 FIXO já causou apagão; como teto
+                                                   # transitório de controlador é seguro
+ENT_GANHO  = _env_float("FNAF_ENT_GANHO", 0.7)     # ganho do controlador (subamortecido; oscilou? 0.4)
+ENT_PASSO_MAX = _env_float("FNAF_ENT_PASSO_MAX", 0.20)  # passo máx por rollout (±20% em log-espaço)
 
-# Métrica de currículo: a partir de qual win_rate (janela móvel) na Noite 1 considerá-la "dominada"
-# — sinal de que vale trocar new_game → continue p/ forçar a Noite 2. Só um alerta, não muda nada.
+# Currículo automático: promove a noite-alvo quando a janela CHEIA da noite alvo cruza o limiar.
+CURRICULO_LIMIAR = _env_float("FNAF_CURRICULO_LIMIAR", 0.50)
+
+# Métrica informativa: a partir de qual win_rate (janela móvel) na Noite 1 considerá-la "dominada".
+# Só um alerta no resumo [POR NOITE] — quem muda o alvo é o CurriculumCallback.
 NOITE1_DOMINIO = _env_float("FNAF_NOITE1_DOMINIO", 0.60)
 
 
@@ -211,11 +228,16 @@ class LogCallback(BaseCallback):
                 else 0.0
             )
 
-            # Marca SÓ o caso especial (menu-crash do Bonnie/Decisão 8); os demais episódios
-            # ficam no formato simples de sempre. Vai no FIM como "| Causa: menu_crash" —
-            # posição/formato que os parsers esperam (enviar_logs_mongodb.py, metricas_treino.py),
-            # sem quebrar a adjacência "RESULTADO | Passos:" exigida pelo regex do mongodb.
-            causa_str = " | Causa: menu_crash" if info.get("causa") == "menu_crash" else ""
+            # Telemetria de desfecho em TODO episódio: "sem saber DO QUE morre (apagão?
+            # animatrônico?), cada ajuste de hiperparâmetro é chute". Só campos que o
+            # LOG_PATTERN do mongodb e o CAUSA do metricas_treino já preveem ("Energia fim"
+            # ANTES de "Causa", no fim da linha) — campo novo fora desses quebraria o regex;
+            # telemetria extra vai para o tensorboard (MetricasPorNoite).
+            causa = info.get("causa")
+            causa_str = (
+                f" | Energia fim: {info.get('energia', 0.0):5.1f}% | Causa: {causa}"
+                if causa else ""
+            )
             linha = (
                 f"{_env_str_obrigatorio('PC')} | "
                 f"Ep {self.episodio:4d} | "
@@ -254,53 +276,55 @@ class LogCallback(BaseCallback):
             self.arquivo_log_steps.close()
 
 
-class EntropiaSchedule(BaseCallback):
-    """Decai ent_coef de `inicio` p/ `fim` (Decisão 6), mas SÓ depois da taxa de vitória numa
-    janela recente cruzar `gate` — antes disso mantém alto (explorar / não congelar antes de
-    vencer). NUNCA vai a 0 (o md avisa: congela em política subótima). O PPO lê model.ent_coef
-    (float) a cada train(), então basta setá-lo entre rollouts.
+class ControladorEntropia(BaseCallback):
+    """Termostato de entropia — substitui o EntropiaSchedule (gate binário por win_rate).
 
-    O gate abre uma vez e não fecha: uma vez que o agente passa a vencer com consistência, começa
-    a consolidar (decair). Se nunca cruzar o gate, ent_coef fica em `inicio` o treino todo."""
-    def __init__(self, inicio: float = ENT_INICIO, fim: float = ENT_FIM, gate: float = ENT_GATE,
-                 janela: int = 50):
+    Por que malha fechada: não existe ent_coef FIXO certo. 0.03 deixava a política aleatória
+    demais p/ conservar energia (morria por apagão ~7min); 0.02 colapsava; e o gate por
+    win_rate nunca abria quando o agente estagnava abaixo dele (ent_coef travado p/ sempre).
+    Aqui o sensor é a PRÓPRIA entropia H da política: começando a colapsar → o coeficiente
+    sobe sozinho; aleatória demais → desce. O alvo decai devagar ao longo do treino
+    (H_INICIO → H_FIM nats; perplexidade e^1.5 ≈ 4.5 → e^0.75 ≈ 2.1 ações efetivas, de um
+    máximo uniforme ln(17) ≈ 2.83) — consolidação gradual SEM depender de cruzar win_rate.
+
+    Medição: em _on_rollout_end, logger.name_to_value["train/entropy_loss"] ainda guarda o
+    train() do rollout ANTERIOR (ordem do SB3: collect_rollouts → _on_rollout_end →
+    _dump_logs → train), e entropy_loss = -mean(H) tanto no PPO quanto no RecurrentPPO.
+    Defasagem de 1 rollout — irrelevante: o colapso se desenrola por dezenas de rollouts.
+
+    Ajuste multiplicativo em log-espaço com passo clampado (±ENT_PASSO_MAX por rollout):
+    com 1 update a cada ~48min precisa reagir em poucas horas, sem serrilhar (ganho < 1,
+    subamortecido; medição já é a média de todas as épocas/minibatches do train). O PPO lê
+    model.ent_coef (float) a cada train(), então basta setá-lo entre rollouts."""
+    def __init__(self, h_inicio: float = H_INICIO, h_fim: float = H_FIM,
+                 ent_inicial: float = ENT_INICIO, ent_min: float = ENT_MIN,
+                 ent_max: float = ENT_MAX, ganho: float = ENT_GANHO,
+                 passo_max: float = ENT_PASSO_MAX):
         super().__init__()
-        self.inicio, self.fim, self.gate, self.janela = inicio, fim, gate, janela
-        self.resultados = deque(maxlen=janela)   # 1 = vitória, 0 = morte (ignora interrompidos)
-        self._prog_gate = None                   # progress_remaining quando o gate abriu
+        self.h_inicio, self.h_fim = h_inicio, h_fim
+        self.ent_inicial          = ent_inicial
+        self.ent_min, self.ent_max = ent_min, ent_max
+        self.ganho, self.passo_max = ganho, passo_max
 
     def _on_training_start(self) -> None:
-        self.model.ent_coef = self.inicio
+        self.model.ent_coef = self.ent_inicial
 
     def _on_step(self) -> bool:
-        if self.locals.get("dones", [False])[0]:
-            info = self.locals.get("infos", [{}])[0]
-            if not info.get("interrompido", False):
-                # win = 6AM REAL (info["vitoria"]). Truncamento (700s) e morte contam 0 — antes
-                # "não morreu" inflava o gate com truncamentos mal-rotulados.
-                self.resultados.append(1 if info.get("vitoria", False) else 0)
-
-        prog = self.model._current_progress_remaining          # 1.0 → 0.0
-        if self._prog_gate is None:
-            taxa = (sum(self.resultados) / len(self.resultados)
-                    if len(self.resultados) >= self.janela else 0.0)
-            if taxa >= self.gate:
-                self._prog_gate = prog                          # abre o decaimento
-        if self._prog_gate is not None:
-            # frac: 0 no gate → 1 no fim do treino
-            frac = 1.0 - (prog / self._prog_gate) if self._prog_gate > 1e-9 else 1.0
-            frac = min(max(frac, 0.0), 1.0)
-            self.model.ent_coef = self.inicio + (self.fim - self.inicio) * frac
         return True
 
     def _on_rollout_end(self) -> None:
-        # Instrumentação (Parte 0): expõe no tensorboard o que antes só dava pra reconstruir
-        # de cabeça. win_rate_50 é a MESMA janela que o gate usa (rolling-50, não a cumulativa
-        # do treino.log, que achata por construção). A entropia CRUA da política sai derivada
-        # no tensorboard: H = -train/entropy_loss / custom/ent_coef.
-        taxa = (sum(self.resultados) / len(self.resultados)) if self.resultados else 0.0
+        prog   = self.model._current_progress_remaining        # 1.0 → 0.0
+        h_alvo = self.h_fim + (self.h_inicio - self.h_fim) * prog
+        entropy_loss = self.model.logger.name_to_value.get("train/entropy_loss")
+        if entropy_loss is not None:                           # ausente só antes do 1º train()
+            h = -float(entropy_loss)
+            erro  = self.ganho * (h_alvo - h)
+            fator = math.exp(min(max(erro, -self.passo_max), self.passo_max))
+            novo  = float(self.model.ent_coef) * fator
+            self.model.ent_coef = float(min(max(novo, self.ent_min), self.ent_max))
+            self.logger.record("custom/entropia", h)           # H crua, direta (sem conta de cabeça)
+        self.logger.record("custom/h_alvo", h_alvo)
         self.logger.record("custom/ent_coef", float(self.model.ent_coef))
-        self.logger.record("custom/win_rate_50", taxa)
 
 
 class MetricasPorNoite(BaseCallback):
@@ -314,21 +338,32 @@ class MetricasPorNoite(BaseCallback):
 
     Loga em custom/noite_{n}/... e imprime um resumo legível a cada `resumo_a_cada` episódios.
     É SÓ medição/alerta — não muda o treino nem decide nada sozinho."""
+    # Rótulos de _classificar_desfecho + morte_golden (janela fechada, _interromper_episodio).
+    # Gravar 0.0 nos ausentes mantém as séries do tensorboard contínuas (fração cai a zero
+    # visivelmente em vez de congelar no último valor).
+    ROTULOS_CAUSA = ("vitoria_gerida", "vitoria_apagao", "morte_energia",
+                     "morte_animatronico", "menu_crash", "morte_golden")
+
     def __init__(self, janela: int = 30, resumo_a_cada: int = 20, dominio: float = NOITE1_DOMINIO):
         super().__init__()
         self.janela, self.resumo_a_cada, self.dominio = janela, resumo_a_cada, dominio
         self.win  = defaultdict(lambda: deque(maxlen=janela))   # noite -> deque(0/1)
         self.surv = defaultdict(lambda: deque(maxlen=janela))   # noite -> deque(tempo_jogo s)
+        self.win_geral = deque(maxlen=50)   # todas as noites — era do EntropiaSchedule (dashboards)
+        self.causas    = deque(maxlen=50)   # rótulo de desfecho por episódio (skill vs sorte)
         self.n_eps = 0
 
     def _on_step(self) -> bool:
         if self.locals.get("dones", [False])[0]:
             info = self.locals.get("infos", [{}])[0]
-            if info.get("interrompido", False):     # interrompido não conta (igual ao gate)
+            if info.get("interrompido", False):     # interrompido não conta (fora da métrica de skill)
                 return True
             noite = int(info.get("noite", 1))
             self.win[noite].append(1 if info.get("vitoria", False) else 0)   # 6AM real, não truncamento
             self.surv[noite].append(float(info.get("tempo", 0.0)))
+            self.win_geral.append(1 if info.get("vitoria", False) else 0)
+            if info.get("causa"):
+                self.causas.append(info["causa"])
             self.n_eps += 1
             if self.n_eps % self.resumo_a_cada == 0:
                 self._imprimir_resumo()
@@ -348,6 +383,15 @@ class MetricasPorNoite(BaseCallback):
                 self.logger.record(f"custom/noite_{noite}/sobrevivencia_s", sum(d) / len(d))
         # Sinal de currículo: 1 = Noite 1 dominada (hora de considerar o continue).
         self.logger.record("custom/curriculo/noite1_dominada", 1.0 if self._noite1_dominada() else 0.0)
+        # win_rate_50: mesma janela do antigo gate (rolling-50, não a cumulativa do treino.log).
+        if self.win_geral:
+            self.logger.record("custom/win_rate_50", sum(self.win_geral) / len(self.win_geral))
+        # Fração de cada desfecho na janela: responde "morre de QUÊ" (apagão = política
+        # gastadora/aleatória; animatrônico = defesa/timing) direto no tensorboard.
+        if self.causas:
+            contagem = Counter(self.causas)
+            for rotulo in self.ROTULOS_CAUSA:
+                self.logger.record(f"custom/causas/{rotulo}", contagem.get(rotulo, 0) / len(self.causas))
 
     def _imprimir_resumo(self) -> None:
         partes = []
@@ -363,6 +407,72 @@ class MetricasPorNoite(BaseCallback):
         else:
             wr1 = (sum(self.win[1]) / len(self.win[1]) * 100) if self.win[1] else 0.0
             print(f"   -> Noite 1 ainda nao dominada ({wr1:.0f}% < {self.dominio*100:.0f}%) — siga em new_game.")
+
+
+class CurriculumCallback(BaseCallback):
+    """Currículo AUTOMÁTICO: promove a noite-alvo do env (noite_desejada, lida por
+    decidir_reset no modo continue) quando a janela CHEIA da noite alvo em MetricasPorNoite
+    cruza o limiar. Substitui a rotina manual de editar FNAF_NOITE_DESEJADA e reiniciar.
+
+      • Janela cheia (>= janela_min eps da noite ALVO) — não mistura noites, ao contrário
+        do antigo gate de entropia, e não promove por meia dúzia de episódios sortudos.
+      • NUNCA rebaixa: regressão de skill se recupera praticando (morte na noite k <= alvo
+        → Continue retoma a noite k — as anteriores continuam no caminho).
+      • Persiste em modelos/curriculo.json a cada promoção; ao retomar aplica
+        max(.env, json) — p/ regredir de propósito, apague/edite o json.
+
+    Deve ser registrado DEPOIS de MetricasPorNoite na lista de callbacks (lê as janelas
+    dele no mesmo _on_step, já atualizadas). noite_desejada só é lida em _preparar_reset
+    (próximo reset), então mudar a qualquer momento é seguro."""
+    CAMINHO = f"{PASTA_MODELOS}/curriculo.json"
+
+    def __init__(self, metricas: MetricasPorNoite, limiar: float = CURRICULO_LIMIAR,
+                 janela_min: int = 30, noite_max: int = MAX_NOITE):
+        super().__init__()
+        self.metricas   = metricas
+        self.limiar     = limiar
+        self.janela_min = janela_min
+        self.noite_max  = noite_max
+        self.alvo       = 1
+
+    def _on_training_start(self) -> None:
+        alvo = int(self.training_env.get_attr("noite_desejada")[0])   # valor inicial do .env
+        if os.path.exists(self.CAMINHO):
+            try:
+                with open(self.CAMINHO, "r", encoding="utf-8") as f:
+                    alvo = max(alvo, int(json.load(f).get("noite_desejada", alvo)))
+            except (ValueError, OSError, TypeError) as erro:
+                print(f"[curriculo] aviso: nao li {self.CAMINHO} ({erro}) — seguindo com alvo {alvo}")
+        if RESET_METODO != "continue":
+            print("[curriculo] AVISO: FNAF_RESET_METODO != continue — a promocao nao muda os resets "
+                  "(new_game sempre volta pra Noite 1).")
+        self._aplicar(alvo)
+        print(f"[curriculo] noite-alvo inicial: {self.alvo} "
+              f"(promove a {self.limiar*100:.0f}% na janela de {self.janela_min} eps)")
+
+    def _aplicar(self, alvo: int) -> None:
+        self.alvo = alvo
+        # set_attr atravessa VecNormalize → DummyVecEnv → FNAFEnv (atributo de instância).
+        self.training_env.set_attr("noite_desejada", alvo)
+        try:
+            with open(self.CAMINHO, "w", encoding="utf-8") as f:
+                json.dump({"noite_desejada": alvo, "step": int(self.num_timesteps),
+                           "quando": datetime.now().isoformat(timespec="seconds")}, f)
+        except OSError as erro:
+            print(f"[curriculo] aviso: nao salvei {self.CAMINHO}: {erro}")
+
+    def _on_step(self) -> bool:
+        if self.locals.get("dones", [False])[0]:
+            d = self.metricas.win[self.alvo]      # janela SÓ da noite alvo
+            if (self.alvo < self.noite_max and len(d) >= self.janela_min
+                    and sum(d) / len(d) >= self.limiar):
+                print(f"[curriculo] Noite {self.alvo} dominada "
+                      f"({sum(d) / len(d) * 100:.0f}% na janela de {len(d)}) -> alvo Noite {self.alvo + 1}")
+                self._aplicar(self.alvo + 1)
+        return True
+
+    def _on_rollout_end(self) -> None:
+        self.logger.record("custom/curriculo/noite_alvo", float(self.alvo))
 
 
 class CheckpointComLog(CheckpointCallback):
@@ -412,10 +522,15 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
         if os.path.exists(caminho_stats):
             print(f"Carregando normalizacao: {caminho_stats}")
             env = VecNormalize.load(caminho_stats, env_base)
+            # O pickle carrega o clip da ÉPOCA do save (ex.: 10, o default antigo, que clipava
+            # a vitória +500 no mesmo teto da morte). Força o atual em qualquer retomada.
+            env.clip_reward = CLIP_REWARD
         else:
-            env = VecNormalize(env_base, norm_obs=False, norm_reward=True, gamma=GAMMA)
+            env = VecNormalize(env_base, norm_obs=False, norm_reward=True, gamma=GAMMA,
+                               clip_reward=CLIP_REWARD)
     else:
-        env = VecNormalize(env_base, norm_obs=False, norm_reward=True, gamma=GAMMA)
+        env = VecNormalize(env_base, norm_obs=False, norm_reward=True, gamma=GAMMA,
+                           clip_reward=CLIP_REWARD)
 
     # Decisão 7 — memória: USAR_LSTM troca PPO (feedforward, controle do A/B) por RecurrentPPO
     # (LSTM, reusando o MultimodalExtractor). Só o ALGORITMO muda — recompensa/VecNormalize/gamma/
@@ -439,7 +554,7 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
             batch_size=BATCH_SIZE,             # bundle: escala com n_steps
             n_epochs=N_EPOCHS,                 # bundle: menos reuso do lote (default 4)
             gamma=GAMMA,
-            ent_coef=ENT_INICIO,               # casa com EntropiaSchedule.inicio (sobrescrito no start)
+            ent_coef=ENT_INICIO,               # valor inicial — o ControladorEntropia assume dali
             target_kl=TARGET_KL,               # bundle: freio extra contra colapso de entropia
             verbose=0,
             tensorboard_log=PASTA_LOGS,
@@ -462,7 +577,8 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     modelo.n_epochs  = N_EPOCHS
     modelo.target_kl = TARGET_KL
     print(f"[hparams] n_steps={modelo.n_steps} batch={modelo.batch_size} n_epochs={N_EPOCHS} "
-          f"target_kl={TARGET_KL} | ent {ENT_INICIO}->{ENT_FIM} (gate {ENT_GATE})")
+          f"target_kl={TARGET_KL} clip_reward={CLIP_REWARD} | ent_coef inicial {ENT_INICIO} | "
+          f"controlador: H {H_INICIO}->{H_FIM} nats, ent [{ENT_MIN}, {ENT_MAX}], ganho {ENT_GANHO}")
 
     # log_callback ANTES do checkpoint na lista: assim, no step do save, o contador de episódio
     # já está atualizado quando CheckpointComLog imprime o contexto.
@@ -474,14 +590,15 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
         save_vecnormalize=True,   # salva o vecnormalize JUNTO de cada checkpoint (par casado p/ retomar)
         log_callback=log_callback,
     )
-    entropia = EntropiaSchedule()  # Decisão 6: decai ent_coef após a taxa de vitória estabilizar
-    metricas_noite = MetricasPorNoite()  # quebra win_rate/sobrevivência por noite (decisão de currículo)
+    entropia = ControladorEntropia()     # termostato: ent_coef em malha fechada sobre a H medida
+    metricas_noite = MetricasPorNoite()  # quebra win_rate/sobrevivência/causas por noite
+    curriculum = CurriculumCallback(metricas_noite)  # DEPOIS de metricas_noite: lê as janelas dele
 
     print(f"Treinando por {timesteps:,} timesteps...\n")
     try:
         modelo.learn(
             total_timesteps=timesteps,
-            callback=[log_callback, checkpoint, entropia, metricas_noite],
+            callback=[log_callback, checkpoint, entropia, metricas_noite, curriculum],
             reset_num_timesteps=carregar_modelo is None,
         )
     except KeyboardInterrupt:

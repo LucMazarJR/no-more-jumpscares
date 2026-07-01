@@ -2,7 +2,7 @@
 
 PRA QUE SERVE
 -------------
-O agente decide a partir de DUAS fontes: a imagem 84x84 (processada pela CNN) e os 10 estados
+O agente decide a partir de DUAS fontes: a imagem 84x84 (processada pela CNN) e os 12 estados
 (porta, luz, energia, ameaça...). Há o risco — já visto no projeto (bug da dupla normalização que
 deixava a CNN cega) — da CNN estar "presente mas inerte": a rede ignora a imagem e decide só pelos
 estados. Aí você paga o custo da CNN à toa e perde as pistas visuais. Este script detecta isso.
@@ -43,14 +43,15 @@ DEBUG = Path("debug")
 # Frames reais e VARIADOS (imagens distintas do jogo) — só os que existirem são usados.
 FRAMES = ["escritorio", "luz_esq_bonnie", "luz_dir_chica", "luz_esq_vazia", "power_10", "no_power"]
 
-# Vetores de estado plausíveis e variados (10 estados, em [0,1]):
-# [porta_esq, porta_dir, luz_esq, luz_dir, camera, camera_ativa, energia, tempo, ameaca_esq, ameaca_dir]
+# Vetores de estado plausíveis e variados (12 estados, em [0,1]) — espelha _capturar_observacao:
+# [porta_esq, porta_dir, luz_esq, luz_dir, camera, camera_ativa, energia, tempo,
+#  ameaca_esq, ameaca_dir, noite/7, tempo_sem_camera/28s]
 ESTADOS = [
-    np.array([0, 0, 0, 0, 0, 0.0, 1.00, 0.00, 0, 0], dtype=np.float32),  # início calmo, cheio
-    np.array([0, 0, 1, 0, 0, 0.0, 0.80, 0.20, 1, 0], dtype=np.float32),  # ameaça esq, porta aberta
-    np.array([1, 0, 1, 0, 0, 0.0, 0.70, 0.30, 1, 0], dtype=np.float32),  # ameaça esq, porta fechada
-    np.array([0, 1, 0, 1, 0, 0.0, 0.50, 0.60, 0, 1], dtype=np.float32),  # ameaça dir, porta fechada
-    np.array([0, 0, 0, 0, 1, 0.5, 0.20, 0.85, 0, 0], dtype=np.float32),  # tarde, pouca energia, câmera
+    np.array([0, 0, 0, 0, 0, 0.0, 1.00, 0.00, 0, 0, 0.14, 0.0], dtype=np.float32),  # início calmo, cheio (N1)
+    np.array([0, 0, 1, 0, 0, 0.0, 0.80, 0.20, 1, 0, 0.29, 0.3], dtype=np.float32),  # ameaça esq, porta aberta (N2)
+    np.array([1, 0, 1, 0, 0, 0.0, 0.70, 0.30, 1, 0, 0.29, 0.5], dtype=np.float32),  # ameaça esq, porta fechada (N2)
+    np.array([0, 1, 0, 1, 0, 0.0, 0.50, 0.60, 0, 1, 0.43, 0.8], dtype=np.float32),  # ameaça dir, Foxy negligenciado (N3)
+    np.array([0, 0, 0, 0, 1, 0.5, 0.20, 0.85, 0, 0, 0.71, 0.0], dtype=np.float32),  # tarde, pouca energia, câmera (N5)
 ]
 
 
