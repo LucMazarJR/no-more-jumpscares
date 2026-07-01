@@ -273,6 +273,8 @@ class FNAFEnv(gym.Env):
         self.capture          = GameCapture()
         self.render_mode      = render_mode
         self.contador_vitoria = 0
+        self._contador_menu   = 0      # frames seguidos vendo o menu (debounce, Decisão 8)
+        self._crash_menu      = False  # último desfecho foi Bonnie/crash pro menu
         self._carregar_templates()
 
         self.observation_space = spaces.Dict({
@@ -609,6 +611,8 @@ class FNAFEnv(gym.Env):
         self.penultima_acao   = None
         self.contador_nada    = 0
         self.contador_vitoria  = 0
+        self._contador_menu    = 0      # debounce da detecção de menu (Decisão 8)
+        self._crash_menu       = False
         self.episode_start_time    = None
         self.passos_sem_camera        = 0
         self._botao_luz_pressionado   = None
@@ -749,6 +753,11 @@ class FNAFEnv(gym.Env):
             observacao = self._capturar_observacao()
             morreu     = self._detectar_morte()
             sobreviveu = self._detectar_vitoria()
+            # Bonnie/crash devolveu ao menu sem tela de morte (Decisão 8) → conta como morte.
+            # O jogo já está no menu, então o reset (que clica New Game) funciona igual.
+            self._crash_menu = self._detectar_menu_crash()
+            if self._crash_menu:
+                morreu = True
         except Exception as erro:
             # Janela sumiu = Golden Freddy fechou o jogo → MORTE. Janela ainda aberta = glitch
             # transitório de captura → interrompido (também derrota, mas reancora na Noite 1).
@@ -823,6 +832,11 @@ class FNAFEnv(gym.Env):
             return None
         if sobreviveu:
             return "vitoria_apagao" if self._apagou else "vitoria_gerida"
+        # Decisão 8: morte detectada pelo menu (Bonnie/crash sem tela de Game Over).
+        # É morte legítima (animatrônico passou), mas rotulada à parte p/ medir quão
+        # frequente a detecção normal por template falha.
+        if self._crash_menu:
+            return "menu_crash"
         return "morte_energia" if self._apagou else "morte_animatronico"
 
     def _executar_acao(self, acao: int) -> bool:
@@ -1148,6 +1162,25 @@ class FNAFEnv(gym.Env):
         h, w = vitoria_img.shape
         self.template_vitoria = vitoria_img[int(h * 0.38):int(h * 0.58), int(w * 0.38):int(w * 0.62)]
 
+        # Template do MENU PRINCIPAL (Decisão 8): Bonnie/crash volta pro menu SEM a tela
+        # de "Game Over", então _detectar_morte() nunca dispara e o episódio ficava preso
+        # até truncar por tempo. Opcional — se faltar, a detecção fica desligada.
+        # Recorta só as letras "New Game": o fundo tem estática aleatória que não
+        # correlaciona entre frames, então as letras constantes é que sustentam o match.
+        # Recorte justo = maior fração de pixel-letra = match mais alto. Coordenadas
+        # medidas na grade (debug/menu_grade.png) em 1280x720: x 172-379, y 402-439.
+        # Exclui as setas ">>" (cursor de seleção, x 104-146) — o cursor pode não estar
+        # sempre sobre New Game, mas as letras estão sempre lá.
+        menu_img, menu_nome = _ler_primeira_existente("menu.png", "menu.jpg", "menu.jpeg")
+        if menu_img is not None:
+            menu_img = cv2.resize(menu_img, self._ref_size)  # garante 1280x720 antes do recorte por pixel
+            self.template_menu = menu_img[402:439, 172:379]
+            print(f"Template de menu carregado: {menu_nome} "
+                  f"({self.template_menu.shape[1]}x{self.template_menu.shape[0]})")
+        else:
+            self.template_menu = None
+            print("Template de menu não encontrado (opcional) — rode: python -m src.utils.calibrar menu")
+
         # Templates de ameaça (Decisão 4A): rosto do animatrônico no vão, por lado.
         # Opcionais — se faltarem, a detecção fica desligada (não quebra o treino).
         self.template_ameaca_esq = cv2.imread(str(refs / "ameaca_esquerda.png"), cv2.IMREAD_GRAYSCALE)
@@ -1196,6 +1229,33 @@ class FNAFEnv(gym.Env):
             self.contador_vitoria = 0
 
         return self.contador_vitoria >= 3
+
+    def _detectar_menu_crash(self) -> bool:
+        """Detecta o MENU PRINCIPAL no meio do episódio (Decisão 8). O Bonnie (e alguns
+        crashes) devolve o jogo ao menu SEM passar pela tela de "Game Over", então
+        _detectar_morte() nunca dispara e o episódio ficava rodando sobre o menu até
+        truncar por tempo (700s), desperdiçando o episódio. Aqui, no meio do episódio,
+        menu = morte. (Golden Freddy fecha a janela e já é tratado no except do step.)"""
+        if self.template_menu is None:
+            return False
+        # Gate por tempo: cobre a transição do reset (o reset já clicou New Game e esperou
+        # a noite carregar; 15s dá folga para não pegar resquício de menu do reset).
+        if self.tempo_jogo < 15.0:
+            return False
+
+        frame = self._capturar_janela()
+        resultado = cv2.matchTemplate(frame, self.template_menu, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, _ = cv2.minMaxLoc(resultado)
+
+        # Threshold 0.60 = ponto de máxima margem, medido na calibração: menu ao vivo
+        # (estática nova) casa ~0.95 porque as letras brilhantes dominam a correlação;
+        # telas não-menu (morte/vitória) ficam ~0.25. Debounce de 2 frames p/ garantir.
+        if float(max_val) > 0.60:
+            self._contador_menu += 1
+        else:
+            self._contador_menu = 0
+
+        return self._contador_menu >= 2
 
     def _match_ameaca(self, frame_cinza: np.ndarray, lado: str) -> float:
         """Score (0–1) de casamento do rosto do animatrônico (Bonnie no vão à esquerda,

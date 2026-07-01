@@ -209,6 +209,11 @@ class LogCallback(BaseCallback):
                 else 0.0
             )
 
+            # Marca SÓ o caso especial (menu-crash do Bonnie/Decisão 8); os demais episódios
+            # ficam no formato simples de sempre. Vai no FIM como "| Causa: menu_crash" —
+            # posição/formato que os parsers esperam (enviar_logs_mongodb.py, metricas_treino.py),
+            # sem quebrar a adjacência "RESULTADO | Passos:" exigida pelo regex do mongodb.
+            causa_str = " | Causa: menu_crash" if info.get("causa") == "menu_crash" else ""
             linha = (
                 f"{_env_str_obrigatorio('PC')} | "
                 f"Ep {self.episodio:4d} | "
@@ -218,6 +223,7 @@ class LogCallback(BaseCallback):
                 f"Tempo: {tempo_ep_minutos:7.2f} min | "
                 f"Recompensa: {self.recompensa_total:8.1f} | "
                 f"Taxa vitória: {taxa_vitoria:.1f}%"
+                f"{causa_str}"
             )
 
             print(linha)

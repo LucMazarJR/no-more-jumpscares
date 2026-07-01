@@ -35,6 +35,46 @@ def capturar_vitoria():
     cv2.imwrite("src/utils/referencias/vitoria.png", frame)
     print("Imagem de vitória salva!")
 
+def _desenhar_grade(img):
+    """Desenha uma grade de 100 em 100px com coordenadas rotuladas (p/ marcar
+    a região das letras 'New Game' pelo número). Igual à do inspecionar."""
+    out = img.copy()
+    h, w = out.shape[:2]
+    for x in range(0, w, 100):
+        cv2.line(out, (x, 0), (x, h), (0, 255, 0), 1)
+        cv2.putText(out, str(x), (x + 2, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+    for y in range(0, h, 100):
+        cv2.line(out, (0, y), (w, y), (0, 255, 0), 1)
+        cv2.putText(out, str(y), (2, y + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+    return out
+
+def capturar_menu():
+    """
+    Referência do MENU PRINCIPAL (Bonnie/crash volta pro menu SEM tela de morte).
+    Deixe o menu principal aparecer com o texto 'New Game' visível e rode.
+    Salva o frame inteiro em referencias/menu.png (o recorte das letras é feito
+    em _carregar_templates) e uma cópia COM GRADE em debug/menu_grade.png, para
+    marcar a região das letras pelas coordenadas da grade.
+    """
+    import os
+    from src.utils.capture import melhor_janela, regiao_cliente
+    from src.environment.fnaf_env import WINDOW_TITLE
+
+    print("Você tem 5 segundos para deixar o MENU PRINCIPAL ('New Game') aparecer...")
+    time.sleep(5)
+
+    # Captura a ÁREA-CLIENTE da janela e redimensiona p/ 1280x720 — MESMO enquadramento
+    # que _capturar_janela() usa na detecção. Garante que o template bata, esteja o jogo
+    # em fullscreen ou em janela (capturar_tela() do monitor inteiro só bateria em fullscreen).
+    win = melhor_janela(WINDOW_TITLE)
+    frame = cv2.resize(cap.capturar_tela(regiao_cliente(win)), (1280, 720))
+    cv2.imwrite("src/utils/referencias/menu.png", frame)
+    print(f"Imagem de menu salva! ({frame.shape[1]}x{frame.shape[0]})")
+
+    os.makedirs("debug", exist_ok=True)
+    cv2.imwrite("debug/menu_grade.png", _desenhar_grade(frame))
+    print("Cópia com grade salva: debug/menu_grade.png (use p/ marcar as letras 'New Game')")
+
 def capturar_camera_aberta():
     """
     Com a câmera ABERTA no jogo (qualquer tab), clique sobre o indicador 'YOU'
@@ -161,10 +201,12 @@ if __name__ == "__main__":
         capturar_morte()
     elif sys.argv[1] == "vitoria":
         capturar_vitoria()
+    elif sys.argv[1] == "menu":
+        capturar_menu()
     elif sys.argv[1] == "camera_aberta":
         capturar_camera_aberta()
     elif sys.argv[1] == "sombra":
         capturar_sombra(sys.argv[2] if len(sys.argv) > 2 else "")
     else:
         print(f"Argumento desconhecido: {sys.argv[1]}")
-        print("Uso: python -m src.utils.calibrar [morte | vitoria | camera_aberta | sombra <presente|vazio>]")
+        print("Uso: python -m src.utils.calibrar [morte | vitoria | menu | camera_aberta | sombra <presente|vazio>]")
