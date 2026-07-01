@@ -523,7 +523,7 @@ ent_coef = "quão forte" é esse empurrão para explorar.
 | 0.01–0.03 (faixa do projeto) | explora o suficiente, ainda aprende |
 | ≥ 0.1 | quase aleatório mesmo depois de muito treino |
 
-> **No projeto:** o `ent_coef` **não é fixo**. Começa em **0.03** e decai até no mínimo **0.01**,
+> **No projeto:** o `ent_coef` **não é fixo**. Começa em **0.02** e decai até no mínimo **0.01**,
 > mas só **depois** que o agente vence com folga (ver 6.4).
 
 ### 6.4 O `EntropiaSchedule` e o conceito de "gate"
@@ -534,9 +534,9 @@ A ideia do projeto: manter a exploração **alta enquanto o agente ainda não ve
 
 ```text
 SE a taxa de vitória (janela de 50 episódios) cruzar 0.40 (40%):
-    abre o gate → começa a decair ent_coef de 0.03 → 0.01
+    abre o gate → começa a decair ent_coef de 0.02 → 0.01
 SENÃO:
-    mantém ent_coef = 0.03 (continua explorando)
+    mantém ent_coef = 0.02 (continua explorando)
 
 O gate abre uma vez e não fecha. Nunca vai a zero (zero = congela a política).
 ```

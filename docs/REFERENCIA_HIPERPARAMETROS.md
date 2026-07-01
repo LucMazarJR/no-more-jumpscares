@@ -10,7 +10,7 @@ o que os logs estão mostrando e prever o efeito de qualquer ajuste.
 >
 > **Valores atuais (fonte: código — bundle anti-colapso):** `gamma=0.997`, `n_steps=8192`,
 > `batch_size=256`, `n_epochs=4`, `target_kl=0.03`, `learning_rate` linear 3e-4→3e-5, e `ent_coef`
-> 0.03→0.01 via `EntropiaSchedule` (gate em **40%** de vitória). Todos sobrescrevíveis por env var
+> 0.02→0.01 via `EntropiaSchedule` (gate em **40%** de vitória). Todos sobrescrevíveis por env var
 > (`FNAF_N_STEPS`, `FNAF_BATCH_SIZE`, `FNAF_N_EPOCHS`, `FNAF_TARGET_KL`, `FNAF_ENT_INICIO/FIM/GATE`).
 > Onde uma seção abaixo citar um valor antigo no exemplo, o **valor atual prevalece**.
 
@@ -18,9 +18,10 @@ o que os logs estão mostrando e prever o efeito de qualquer ajuste.
 
 ## Coeficiente de entropia (`ent_coef`)
 
-**Valor atual:** `0.03` inicial, decaindo até `0.01` via `EntropiaSchedule` — o decaimento só
+**Valor atual:** `0.02` inicial, decaindo até `0.01` via `EntropiaSchedule` — o decaimento só
 começa **depois** que a taxa de vitória (janela de 50 episódios) cruza **40%** (o "gate"). Nunca vai
-a zero. (Os exemplos abaixo usam o antigo `0.01` fixo; a explicação do conceito segue válida.)
+a zero. (Foi 0.03; baixado após diagnóstico de que a política ficava aleatória demais p/ conservar
+energia. Os exemplos abaixo usam o antigo `0.01` fixo; a explicação do conceito segue válida.)
 
 ### O que é
 

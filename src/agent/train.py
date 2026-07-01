@@ -89,13 +89,15 @@ def _env_float(nome: str, padrao: float) -> float:
 #                       (Definem o rollout buffer → só valem em treino FRESCO, igual ao gamma.)
 #   n_epochs↓         : menos reuso/super-otimização do MESMO lote por update (10× afiava cedo demais).
 #   target_kl         : freio extra — corta as épocas se a política andar longe demais (protege a entropia).
-#   ent_inicio/fim/gate: começa mais alto (0.03), piso mais alto (0.01) e GATE mais alto (0.40) — o
-#                       decaimento só abre quando o agente JÁ vence com folga, não no ótimo local de ~20%.
+#   ent_inicio/fim/gate: piso mais alto (0.01) e GATE mais alto (0.40) — decaimento só abre quando o
+#                       agente JÁ vence com folga. inicio=0.02 (baixado de 0.03 após diagnóstico: a
+#                       0.03 a política ficava aleatória demais p/ CONSERVAR energia — morria sempre
+#                       ~7min por apagão; 0.02 concentra na eficiência sem colapsar. Ainda 2× o antigo).
 N_STEPS    = max(64, _env_int("FNAF_N_STEPS",   8192))
 BATCH_SIZE = max(8,  _env_int("FNAF_BATCH_SIZE", 256))
 N_EPOCHS   = max(1,  _env_int("FNAF_N_EPOCHS",     4))
 TARGET_KL  = _env_float("FNAF_TARGET_KL",  0.03)
-ENT_INICIO = _env_float("FNAF_ENT_INICIO", 0.03)
+ENT_INICIO = _env_float("FNAF_ENT_INICIO", 0.02)
 ENT_FIM    = _env_float("FNAF_ENT_FIM",    0.01)
 ENT_GATE   = _env_float("FNAF_ENT_GATE",   0.40)
 
@@ -274,7 +276,9 @@ class EntropiaSchedule(BaseCallback):
         if self.locals.get("dones", [False])[0]:
             info = self.locals.get("infos", [{}])[0]
             if not info.get("interrompido", False):
-                self.resultados.append(0 if info.get("morreu", False) else 1)
+                # win = 6AM REAL (info["vitoria"]). Truncamento (700s) e morte contam 0 — antes
+                # "não morreu" inflava o gate com truncamentos mal-rotulados.
+                self.resultados.append(1 if info.get("vitoria", False) else 0)
 
         prog = self.model._current_progress_remaining          # 1.0 → 0.0
         if self._prog_gate is None:
@@ -323,7 +327,7 @@ class MetricasPorNoite(BaseCallback):
             if info.get("interrompido", False):     # interrompido não conta (igual ao gate)
                 return True
             noite = int(info.get("noite", 1))
-            self.win[noite].append(0 if info.get("morreu", False) else 1)
+            self.win[noite].append(1 if info.get("vitoria", False) else 0)   # 6AM real, não truncamento
             self.surv[noite].append(float(info.get("tempo", 0.0)))
             self.n_eps += 1
             if self.n_eps % self.resumo_a_cada == 0:

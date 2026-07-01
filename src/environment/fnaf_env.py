@@ -810,6 +810,7 @@ class FNAFEnv(gym.Env):
             "camera_aberta":  self.camera_aberta,
             "camera_ativa":   self.camera_ativa,
             "morreu":         morreu,
+            "vitoria":        sobreviveu,   # 6AM REAL (terminal). Truncamento (700s) NÃO é vitória.
             "acao_valida":    acao_valida,
             "acao_nome":      ACOES[acao],
             "bonus_hora":     self._total_bonus_hora,
