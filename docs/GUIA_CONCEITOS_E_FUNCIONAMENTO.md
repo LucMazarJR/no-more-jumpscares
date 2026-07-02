@@ -118,11 +118,11 @@ multimodal — duas modalidades de dado diferentes):
 ```text
 observação = {
     "imagem":  matriz 84 × 84 × 1  (a tela do jogo, reduzida e em tons de cinza)
-    "estados": vetor de 11 números (todos normalizados entre 0 e 1)
+    "estados": vetor de 12 números (todos normalizados entre 0 e 1)
 }
 ```
 
-Os 11 estados, na ordem exata do código:
+Os 12 estados, na ordem exata do código:
 
 ```text
 [0] porta_esquerda   (0/1)         [6]  energia / 100         (0.0–1.0)
@@ -130,8 +130,12 @@ Os 11 estados, na ordem exata do código:
 [2] luz_esquerda     (0/1)         [8]  ameaça_esquerda (0/1)
 [3] luz_direita      (0/1)         [9]  ameaça_direita  (0/1)
 [4] camera_aberta    (0/1)         [10] noite / 7            (dificuldade)
-[5] camera_ativa / 11
+[5] camera_ativa / 11              [11] tempo_sem_camera / 28s (risco do Foxy)
 ```
+
+> O 12º estado (`tempo_sem_camera`) entrou no pacote de julho/2026: o shaping do Foxy já punia
+> "câmera negligenciada", mas o agente **não via** há quanto tempo não checava — era punido por
+> uma variável fora da observação. Agora vê exatamente o que o reward cobra.
 
 > **Onde no código:** o vetor é montado em `_capturar_observacao`
 > ([fnaf_env.py:1086](../src/environment/fnaf_env.py#L1086)).
@@ -204,7 +208,7 @@ uma jogada foi boa, o crítico dá um palpite imediato. (Detalhes na Parte 5, "v
 
 ### 3.4 Como isso vira uma rede neural — o `MultimodalExtractor`
 
-A imagem e os 11 estados são tipos de dado muito diferentes, então cada um passa por um caminho
+A imagem e os 12 estados são tipos de dado muito diferentes, então cada um passa por um caminho
 próprio antes de se juntarem:
 
 ```text
@@ -403,9 +407,9 @@ basta para este guia.
 ### 5.3 O ciclo do PPO: rollout → update
 
 ```text
-┌── 1. ROLLOUT: joga e coleta n_steps=2048 experiências (≈ 3 noites) ──┐
+┌── 1. ROLLOUT: joga e coleta n_steps=4096 experiências (≈ 5-6 noites) ─┐
 │                                                                       │
-│   (s, a, r) (s, a, r) (s, a, r) ... × 2048                            │
+│   (s, a, r) (s, a, r) (s, a, r) ... × 4096                            │
 └───────────────────────────────────────────────────────────────────┬─┘
                                                                       ▼
 ┌── 2. UPDATE: reusa esse lote n_epochs=10 vezes para ajustar a rede ──┐
@@ -426,17 +430,19 @@ basta para este guia.
 
 | Parâmetro | Valor | O que é | Efeito |
 |---|---|---|---|
-| `n_steps` | 8192 | experiências coletadas antes de cada update (≈11 noites) | maior = gradiente mais estável, porém mais lento |
+| `n_steps` | 4096 | experiências coletadas antes de cada update (≈5-6 noites) | maior = gradiente mais estável, porém updates mais raros |
 | `batch_size` | 256 | tamanho do mini-lote dentro do update | menor = updates mais ruidosos |
 | `n_epochs` | 4 | quantas vezes o **mesmo** lote é reusado | maior = extrai mais do lote, **mas arrisca over-otimizar** |
 | `target_kl` | 0.03 | corta as épocas se a política andar longe demais | freio extra contra colapso de entropia |
 
-> **Atenção — este é o ponto que motivou o bundle anti-colapso atual:** com a configuração antiga
+> **Atenção — a história deste parâmetro conta o problema todo:** com a configuração antiga
 > (`n_steps=2048` ≈ **3 episódios**, `n_epochs=10`), cada lote pequeno e pouco diverso era
 > "espremido" 10 vezes — o que **super-otimiza** a política para aquelas 3 noites e foi um dos
-> motivos de a entropia colapsar cedo. Os valores atuais atacam isso por três lados ao mesmo tempo:
-> **mais episódios por lote** (8192 ≈ 11 noites), **menos reuso** (`n_epochs=4`) e um **freio de KL**
-> (`target_kl≈0.03`) que corta as épocas se a política andar longe demais.
+> motivos de a entropia colapsar cedo. O bundle anti-colapso subiu para 8192 (≈11 noites) —
+> só que isso custava **1 update a cada ~95 min de jogo real**. Com o BC warmstart (a política
+> já parte decente), o pacote atual assentou no meio-termo: **4096** (≈5-6 noites de diversidade,
+> updates 2× mais frequentes), mantendo **menos reuso** (`n_epochs=4`) e o **freio de KL**
+> (`target_kl≈0.03`).
 
 ### 5.5 O "freio": clipping, `approx_kl` e `clip_fraction`
 
@@ -523,31 +529,35 @@ ent_coef = "quão forte" é esse empurrão para explorar.
 | 0.01–0.03 (faixa do projeto) | explora o suficiente, ainda aprende |
 | ≥ 0.1 | quase aleatório mesmo depois de muito treino |
 
-> **No projeto:** o `ent_coef` **não é fixo**. Começa em **0.02** e decai até no mínimo **0.01**,
-> mas só **depois** que o agente vence com folga (ver 6.4).
+> **No projeto:** o `ent_coef` **não é fixo nem segue um cronograma cego** — é ajustado em tempo
+> real por um "termostato" que mede a entropia da política (ver 6.4).
 
-### 6.4 O `EntropiaSchedule` e o conceito de "gate"
+### 6.4 O `ControladorEntropia` — um termostato para a exploração
 
-A ideia do projeto: manter a exploração **alta enquanto o agente ainda não vence** e só
-**consolidar** (reduzir entropia) **depois** que ele aprende a ganhar. Isso é controlado por um
-**gate** (portão):
+A ideia: em vez de escolher um `ent_coef` e torcer, o treino define um **alvo de entropia**
+(quanta aleatoriedade a política DEVE ter em cada fase) e ajusta o coeficiente sozinho, em malha
+fechada — como um termostato mede a temperatura e liga/desliga o aquecedor:
 
 ```text
-SE a taxa de vitória (janela de 50 episódios) cruzar 0.40 (40%):
-    abre o gate → começa a decair ent_coef de 0.02 → 0.01
-SENÃO:
-    mantém ent_coef = 0.02 (continua explorando)
+alvo de H: 1.5 nats (início) ──decai devagar──► 0.75 nats (fim do treino)
+           (≈ 4.5 "ações efetivas")            (≈ 2.1 "ações efetivas")
 
-O gate abre uma vez e não fecha. Nunca vai a zero (zero = congela a política).
+a cada rollout:
+    mede a entropia H real da política (do último train())
+    H abaixo do alvo (colapsando)      → ent_coef SOBE  (até +20%/rollout)
+    H acima do alvo (aleatória demais) → ent_coef DESCE
+    limites: ent_coef ∈ [0.003, 0.03]
 ```
 
-> **Onde no código:** classe `EntropiaSchedule` em [train.py:210](../src/agent/train.py#L210).
+> **Onde no código:** classe `ControladorEntropia` em [train.py](../src/agent/train.py).
+> No tensorboard: `custom/entropia` (H medida), `custom/h_alvo`, `custom/ent_coef`.
 
-> **Atenção (o problema que diagnosticamos — e a correção aplicada):** o gate **era** 20%. Mas 20%
-> é exatamente o valor do **ótimo local** em que o agente fica preso (vence a Noite 1, morre na
-> Noite 2). Ou seja, o schedule começava a **matar a exploração no exato momento em que o agente
-> alcançava a armadilha**, ajudando a cravá-lo nela. Por isso o gate foi **subido para 40%**: o
-> decaimento só abre quando o agente já vence com folga, bem acima do ótimo local.
+> **A história de por que virou termostato:** a 1ª versão usava um valor FIXO — 0.03 deixava a
+> política aleatória demais (desperdiçava energia e morria de apagão) e 0.02 colapsava. A 2ª versão
+> (`EntropiaSchedule`) decaía o coeficiente atrás de um **gate** de taxa de vitória (20%, depois
+> 40%) — mas quando o agente estagnava ABAIXO do gate (o caso real: ~30%), o gate nunca abria e o
+> coeficiente ficava travado para sempre. Quando nenhum valor fixo funciona e o gatilho certo
+> depende do que a política está fazendo AGORA, a resposta é medir e reagir: malha fechada.
 
 ### 6.5 Colapso de entropia, convergência prematura e ótimo local
 
@@ -602,7 +612,7 @@ VecNormalize(norm_obs=False, norm_reward=True, gamma=0.997)
 - `norm_reward=True` → **normaliza a recompensa** (divide por um desvio-padrão móvel do retorno).
   Isso evita que os terminais grandes (+500/−100) desestabilizem o crítico.
 - `norm_obs=False` → **NÃO normaliza a observação**. A observação já vem pronta: a imagem é
-  normalizada pelo próprio SB3 (pixels → 0–1) e os 11 estados já são montados entre 0 e 1 no
+  normalizada pelo próprio SB3 (pixels → 0–1) e os 12 estados já são montados entre 0 e 1 no
   ambiente. Normalizar de novo seria redundante e poderia distorcer.
 
 > **Onde no código:** [train.py:296](../src/agent/train.py#L296).
@@ -785,6 +795,11 @@ FNAF_USAR_LSTM=1  → usa RecurrentPPO (LSTM) em vez de PPO (feedforward)
 LSTM pequena: lstm_hidden_size=128, n_lstm_layers=1
 ```
 
+> **Fase atual: DESLIGADA (`FNAF_USAR_LSTM=0`).** O 12º estado (`tempo_sem_camera`) tornou o risco
+> do Foxy **observável sem memória**, e o warmstart de BC só transfere 100% dos pesos no feedforward.
+> A LSTM volta como A/B se, dominada a Noite 2, o agente estagnar na 3+ morrendo do que não se vê
+> (ver PACOTE_BC_ENTROPIA.md §2.7 — o caso restante é o Freddy).
+
 > **Atenção:** a LSTM exige **masking** correto (`episode_starts`) — ela precisa **zerar a memória**
 > no início de cada episódio, senão "lembra" da noite anterior e a avaliação mente. Há utilitários
 > (`testar_masking`, `sonda_memoria`) para validar isso.
@@ -795,8 +810,10 @@ LSTM pequena: lstm_hidden_size=128, n_lstm_layers=1
 
 **Currículo** = treinar primeiro em versões mais fáceis e aumentar a dificuldade aos poucos. No
 problema atual, o agente nunca aprende a Noite 2 porque **morre antes de amostrá-la**. O modo
-`continue` (mirando `FNAF_NOITE_DESEJADA=2`) **força** a exposição à Noite 2 reusando a máquina de
-reset que já existe — atacando a fome de amostra direto.
+`continue` **força** a exposição à noite-alvo reusando a máquina de reset que já existe — atacando
+a fome de amostra direto. Desde julho/2026 a noite-alvo é promovida **automaticamente** pelo
+`CurriculumCallback` (50% de vitória na janela de 30 eps da noite alvo → alvo+1; persiste em
+`modelos/curriculo.json`) — sem editar `.env` a cada avanço.
 
 <div style="page-break-after: always;"></div>
 
@@ -809,16 +826,13 @@ diretamente no código:
 |---|---|---|---|
 | **D4 / 4A / 4B** | Visão computacional + potential shaping | Extrair estado da imagem (ameaça por template, energia por OCR, porta por cor) e guiar com Φ | `_atualizar_ameaca`, `_ler_energia`, `_potencial_seguranca` |
 | **D5** | Ablação | Testar se a CNN realmente contribui, zerando um ramo da observação na avaliação | `main.py jogar --ablacao imagem\|estados` |
-| **D6** | Schedules (γ, LR, ent_coef) | Bundle: γ 0.995→0.997, LR linear 3e-4→3e-5, ent_coef 0.02→0.005 com gate | `EntropiaSchedule`, `linear()` em train.py |
-| **D7** | Memória + currículo | LSTM (RecurrentPPO) para Foxy/Freddy; noite no estado; reset new_game/continue | `FNAF_USAR_LSTM`, `decidir_reset` |
+| **D6** | Schedules (γ, LR, entropia) | γ 0.995→0.997, LR linear 3e-4→3e-5; o schedule de entropia evoluiu p/ o termostato (§6.4) | `ControladorEntropia`, `linear()` em train.py |
+| **D7** | Memória + currículo | LSTM (RecurrentPPO) p/ Freddy — desligada nesta fase (§10.2); noite no estado; reset new_game/continue automatizado | `FNAF_USAR_LSTM`, `decidir_reset`, `CurriculumCallback` |
 
-> **Sobre D6 (importante para os experimentos):** os três botões (γ, LR, ent_coef) mudaram **juntos**
-> porque amostra é cara (rodar 3 runs isolados sairia caro). A regra do projeto: se o bundle
-> **piorar**, reverter **um botão por vez**. É a mesma disciplina A/B que os experimentos E1/E2/E3
-> seguem — **uma variável por vez**.
-
-> **Atenção:** a `docs/REFERENCIA_HIPERPARAMETROS.md` ainda cita valores **antigos** em alguns
-> trechos (γ=0.995, ent_coef=0.01). Os valores **atuais** corretos estão neste guia e no código.
+> **Sobre D6 (importante para os experimentos):** os botões mudaram **juntos** porque amostra é
+> cara (rodar runs isolados sairia caro). A regra do projeto: se um pacote **piorar**, reverter
+> **um botão por vez** (mapa sintoma→botão em `REFERENCIA_HIPERPARAMETROS.md`). É a mesma
+> disciplina A/B que os experimentos E1/E2/E3 seguem — **uma variável por vez**.
 
 <div style="page-break-after: always;"></div>
 
@@ -947,10 +961,11 @@ modelo de controle (`modelos/*.zip` + `vecnormalize.pkl`) **antes** de um experi
 
 ### Documentos relacionados
 
-- `docs/REFERENCIA_HIPERPARAMETROS.md` — consulta rápida de hiperparâmetros (atenção: alguns valores
-  defasados; este guia tem os atuais).
+- `docs/README.md` — índice de toda a documentação, dos docs vivos aos históricos.
+- `docs/PACOTE_BC_ENTROPIA.md` — o pacote atual (BC warmstart + termostato de entropia + currículo).
+- `docs/REFERENCIA_HIPERPARAMETROS.md` — consulta rápida de hiperparâmetros.
 - `docs/GUIA_TENSORBOARD.md` e `docs/MONITORAMENTO_TREINO.md` — leitura dos logs e do tensorboard.
-- `docs/AUDITORIA_RECOMPENSA_E_RL.md` e `docs/ALEM_DO_RL.md` — auditoria da recompensa e ideias além
-  do RL puro.
+- `docs/historico/AUDITORIA_RECOMPENSA_E_RL.md` e `docs/historico/ALEM_DO_RL.md` — 📦 auditoria da
+  recompensa e ideias além do RL puro (retratos de época).
 
 *Fim do guia.*

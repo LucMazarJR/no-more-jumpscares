@@ -143,15 +143,22 @@ class LogCallback(BaseCallback):
         self._pausa_disponivel = True
         self._log_steps        = log_steps
 
-        os.makedirs("logs", exist_ok=True)
+        os.makedirs("logs/analise", exist_ok=True)
         cabecalho = f"\n{'='*60}\nTreino iniciado\n{'='*60}\n"
 
+        # Convenção de logs: treino.log (e o console) ficam ENXUTOS — é o que se lê durante a
+        # execução. Telemetria p/ análise (Energia fim, Causa, linhas OCORRIDO) vai para
+        # logs/analise/treino_detalhado.log, que é o que os parsers (metricas_treino,
+        # enviar_logs_mongodb) preferem ler.
         self.arquivo_log = open("logs/treino.log", "a", encoding="utf-8")
         self.arquivo_log.write(cabecalho)
 
+        self.arquivo_log_detalhado = open("logs/analise/treino_detalhado.log", "a", encoding="utf-8")
+        self.arquivo_log_detalhado.write(cabecalho)
+
         self.arquivo_log_steps = None
         if log_steps:
-            self.arquivo_log_steps = open("logs/treino_steps.log", "a", encoding="utf-8")
+            self.arquivo_log_steps = open("logs/analise/treino_steps.log", "a", encoding="utf-8")
             self.arquivo_log_steps.write(cabecalho)
 
     def _on_step(self) -> bool:
@@ -228,16 +235,10 @@ class LogCallback(BaseCallback):
                 else 0.0
             )
 
-            # Telemetria de desfecho em TODO episódio: "sem saber DO QUE morre (apagão?
-            # animatrônico?), cada ajuste de hiperparâmetro é chute". Só campos que o
-            # LOG_PATTERN do mongodb e o CAUSA do metricas_treino já preveem ("Energia fim"
-            # ANTES de "Causa", no fim da linha) — campo novo fora desses quebraria o regex;
-            # telemetria extra vai para o tensorboard (MetricasPorNoite).
-            causa = info.get("causa")
-            causa_str = (
-                f" | Energia fim: {info.get('energia', 0.0):5.1f}% | Causa: {causa}"
-                if causa else ""
-            )
+            # Linha ENXUTA no console e no treino.log (leitura de execução). A telemetria de
+            # desfecho — "sem saber DO QUE morre, cada ajuste é chute" — vai na MESMA linha,
+            # mas só no detalhado: campos "Energia fim" e "Causa" no fim, na ordem que o
+            # LOG_PATTERN do mongodb e o CAUSA do metricas_treino já preveem.
             linha = (
                 f"{_env_str_obrigatorio('PC')} | "
                 f"Ep {self.episodio:4d} | "
@@ -247,33 +248,37 @@ class LogCallback(BaseCallback):
                 f"Tempo: {tempo_ep_minutos:7.2f} min | "
                 f"Recompensa: {self.recompensa_total:8.1f} | "
                 f"Taxa vitória: {taxa_vitoria:.1f}%"
-                f"{causa_str}"
+            )
+            causa = info.get("causa")
+            detalhe = (
+                f" | Energia fim: {info.get('energia', 0.0):5.1f}% | Causa: {causa}"
+                if causa else ""
             )
 
             print(linha)
             self.arquivo_log.write(linha + "\n")
+            self.arquivo_log_detalhado.write(linha + detalhe + "\n")
 
             ocorrido = info.get("ocorrido")
             if interrompido and ocorrido:
-                linha_ocorrido = (
+                # Diagnóstico de interrupção: só no log de análise (execução fica limpa).
+                self.arquivo_log_detalhado.write(
                     f"{_env_str_obrigatorio('PC')} | "
                     f"Ep {self.episodio:4d} | "
-                    f"OCORRIDO | {ocorrido}"
+                    f"OCORRIDO | {ocorrido}\n"
                 )
-                print(linha_ocorrido)
-                self.arquivo_log.write(linha_ocorrido + "\n")
 
             self.arquivo_log.flush()
+            self.arquivo_log_detalhado.flush()
             self.recompensa_total = 0.0
 
         return True
 
     def _on_training_end(self):
-        self.arquivo_log.write("Treino finalizado\n")
-        self.arquivo_log.close()
-        if self.arquivo_log_steps:
-            self.arquivo_log_steps.write("Treino finalizado\n")
-            self.arquivo_log_steps.close()
+        for arquivo in (self.arquivo_log, self.arquivo_log_detalhado, self.arquivo_log_steps):
+            if arquivo and not arquivo.closed:
+                arquivo.write("Treino finalizado\n")
+                arquivo.close()
 
 
 class ControladorEntropia(BaseCallback):
@@ -557,7 +562,9 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
             ent_coef=ENT_INICIO,               # valor inicial — o ControladorEntropia assume dali
             target_kl=TARGET_KL,               # bundle: freio extra contra colapso de entropia
             verbose=0,
-            tensorboard_log=PASTA_LOGS,
+            # Subpasta própria: a raiz de logs/ fica só com treino.log + desyncs.log.
+            # `tensorboard --logdir logs` continua funcionando (o TB varre subpastas).
+            tensorboard_log=f"{PASTA_LOGS}/tensorboard",
             device="auto",
         )
         # BC warmstart (opcional): inicializa a percepção a partir de um checkpoint (modelo de
@@ -604,12 +611,11 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     except KeyboardInterrupt:
         print("\nTreino interrompido pelo usuario. Salvando estado atual...")
     finally:
-        if not log_callback.arquivo_log.closed:
-            log_callback.arquivo_log.write("Treino finalizado\n")
-            log_callback.arquivo_log.close()
-        if log_callback.arquivo_log_steps and not log_callback.arquivo_log_steps.closed:
-            log_callback.arquivo_log_steps.write("Treino finalizado\n")
-            log_callback.arquivo_log_steps.close()
+        for arquivo in (log_callback.arquivo_log, log_callback.arquivo_log_detalhado,
+                        log_callback.arquivo_log_steps):
+            if arquivo and not arquivo.closed:
+                arquivo.write("Treino finalizado\n")
+                arquivo.close()
 
         caminho_final = f"{PASTA_MODELOS}/fnaf_ppo_final"
         modelo.save(caminho_final)

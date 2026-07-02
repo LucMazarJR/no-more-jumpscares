@@ -1,5 +1,10 @@
 # Decisões de recompensa e RL — em ordem de urgência
 
+> 📦 **HISTÓRICO** — retrato de junho/2026, anterior ao pacote BC+entropia. As Decisões 1–7
+> daqui foram implementadas (e algumas superadas: o schedule de entropia da Decisão 6 virou o
+> ControladorEntropia; a LSTM da Decisão 7 está desligada nesta fase). Estado atual:
+> [../PACOTE_BC_ENTROPIA.md](../PACOTE_BC_ENTROPIA.md) · índice: [../README.md](../README.md).
+
 Verificação feita direto no código. Só entram pontos que **mudam o desempenho do agente** e
 exigem decisão. Cada decisão tem três partes: **o problema** (por que atrapalha, com os
 números reais), **o que mudar** (com exemplo de código antes/depois) e **o que esperar**.

@@ -1,5 +1,9 @@
 # Além do aprendizado por reforço
 
+> 📦 **HISTÓRICO** — panorama especulativo de maio/2026 (DAgger, GAIL, DreamerV3, etc.).
+> Do que está aqui, o Behavioral Cloning foi implementado como warmstart (pacote de julho/2026).
+> Estado atual: [../PACOTE_BC_ENTROPIA.md](../PACOTE_BC_ENTROPIA.md) · índice: [../README.md](../README.md).
+
 Este documento descreve abordagens alternativas ao PPO puro para treinar uma IA a
 jogar FNAF1. O objetivo não é substituir o RL, mas entender quais outros paradigmas
 existem, o que cada um resolve melhor, e como poderiam ser combinados com o projeto

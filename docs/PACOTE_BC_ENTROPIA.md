@@ -4,6 +4,10 @@
 > **Problema que ataca:** a entropia da política caía rápido, o agente chegava a ~30% de vitória
 > na Noite 1 e estagnava nesse ótimo local — "tem potencial pra aprender, mas para no bom lugar
 > antes de aprender de verdade".
+>
+> 📖 Termos como *quase-Markov*, *nats*, *perplexidade*, *malha fechada*, *dithering*,
+> *potential-based* e *macro-recall* estão explicados no **[Glossário](#7-glossário--os-termos-técnicos-usados-neste-doc)**
+> no fim deste doc.
 
 ---
 
@@ -154,9 +158,11 @@ natural contra esquecimento). Persiste em `modelos/curriculo.json`; retomada apl
 chute (ex.: `morte_energia` dominante = política gastadora/aleatória → baixar H_alvo;
 `morte_animatronico` = defesa/timing → BC fraco em portas).
 
-**Solução:** toda linha de episódio do `treino.log` ganha `| Energia fim: X% | Causa: <rotulo>`
-(formato que `enviar_logs_mongodb.py` e `metricas_treino.py` JÁ parseiam); o caminho do Golden
-Freddy (`_interromper_episodio`) agora rotula `morte_golden`; e o tensorboard ganha
+**Solução:** o `logs/treino.log` (e o console) ficam com a linha ENXUTA de sempre — leitura de
+execução limpa. A telemetria vai para `logs/analise/treino_detalhado.log`: mesma linha +
+`| Energia fim: X% | Causa: <rotulo>` (formato que `enviar_logs_mongodb.py` e
+`metricas_treino.py` preferem ler, com fallback pro enxuto); o caminho do Golden Freddy
+(`_interromper_episodio`) agora rotula `morte_golden`; e o tensorboard ganha
 `custom/causas/{rotulo}` (fração na janela de 50) para os 6 rótulos:
 `vitoria_gerida, vitoria_apagao, morte_energia, morte_animatronico, menu_crash, morte_golden`.
 Também: `custom/win_rate_50` (mudou do antigo schedule para `MetricasPorNoite`) e
@@ -291,3 +297,73 @@ botões PRÓPRIOS, não alcançáveis pelo `Continue`. A mecânica de reset atua
    em `custom/curriculo/noite_alvo` e `modelos/curriculo.json`.
 5. **Parsers de log** → a linha de episódio só ganhou campos que o `LOG_PATTERN` já previa
    (`Energia fim`, `Causa`); telemetria nova é só tensorboard.
+
+## 7. Glossário — os termos técnicos usados neste doc
+
+Em linguagem direta, na ordem em que importam para entender o pacote. Para a teoria completa do
+zero, veja o [GUIA_CONCEITOS_E_FUNCIONAMENTO.md](GUIA_CONCEITOS_E_FUNCIONAMENTO.md).
+
+**Markov / quase-Markov** — uma decisão é "Markov" quando o estado ATUAL basta para decidir bem
+(não é preciso lembrar do passado). O jogo violava isso: o risco do Foxy dependia de "há quanto
+tempo não checo a câmera", que o agente **não via** — para decidir bem ele precisaria de memória.
+Colocar esse tempo na observação (12º estado) torna o ambiente "quase-Markov": o presente volta a
+conter (quase) tudo o que importa, e uma rede sem memória volta a ser suficiente.
+
+**Observabilidade parcial (POMDP)** — quando o agente não vê tudo o que existe no jogo (ex.: onde
+o Freddy está sem abrir a câmera certa). O oposto do laboratório ideal onde o estado é dado de
+graça. Mitigações: sensores melhores (nossos templates de ameaça), estados derivados (12º estado)
+ou memória (LSTM).
+
+**Entropia (H) / nats** — mede o quão "espalhada" está a escolha de ações da política. H = 0:
+sempre a mesma ação (determinística). H máxima aqui = ln(17) ≈ 2.83 **nats** (as 17 ações com
+probabilidade igual). "Nat" é a unidade quando o logaritmo é natural (base e) — o análogo do "bit",
+que usa base 2. Colapso de entropia = H caindo cedo demais, a política cristaliza antes de conhecer
+estratégias melhores.
+
+**Perplexidade / "ações efetivas"** — e^H, um jeito intuitivo de ler a entropia: H = 1.5 nats ⇒
+e^1.5 ≈ 4.5, "a política age como se escolhesse entre ~4.5 ações". Por isso o alvo 1.5 → 0.75
+significa "explore como quem considera 4-5 opções, termine considerando ~2".
+
+**Malha fechada / termostato / ganho** — controle em malha ABERTA segue um plano fixo (ex.: "decaia
+o ent_coef linearmente"); em malha FECHADA, mede-se o efeito real e corrige-se a cada passo — como
+um termostato: mede a temperatura (a entropia H), compara com o alvo e ajusta o aquecedor (o
+ent_coef). O **ganho** (0.7) é o tamanho da reação a cada erro; **subamortecido** = reage com calma
+o bastante para não oscilar (serrilhar) em volta do alvo.
+
+**Dithering** — exploração por puro ruído: sortear ações fora do padrão só para variar. É a
+exploração que o bônus de entropia compra. Funciona quando o acaso pode tropeçar em algo bom; aqui
+é PUNIDO pelo jogo (toggles aleatórios de porta gastam energia → apagão → morte), por isso o BC
+warmstart importa mais que "mais entropia".
+
+**Shaping potential-based / telescopar** — jeito seguro de dar dicas de recompensa: em vez de
+premiar ações ("fechou porta: +1", que vicia), define-se um potencial Φ("quão segura é a situação")
+e premia-se só a VARIAÇÃO γ·Φ(depois)−Φ(antes). Somada no episódio inteiro, essa série se cancela
+quase toda ("telescopa", como (b−a)+(c−b) = c−a) — então a dica acelera o aprendizado **sem mudar
+qual é a melhor estratégia**.
+
+**Behavioral Cloning (BC) / warmstart** — BC = aprendizado por imitação: a rede aprende a prever "que
+ação o humano tomou vendo esta tela" (aprendizado supervisionado, sem recompensa). **Warmstart** =
+usar esses pesos como PONTO DE PARTIDA do RL, em vez de começar aleatório. É só o init — o RL fica
+livre para divergir e melhorar sobre o clonado.
+
+**Sampler balanceado / split estratificado / recall / macro-recall** — ferramentas do treino do BC:
+o dataset tem um oceano de "nada" e pouquíssimas portas, então o **sampler balanceado** sorteia os
+exemplos raros com mais frequência (peso 1/frequência da classe); o **split estratificado** separa
+o conjunto de validação POR classe (senão as portas caem todas no treino); **recall** de uma classe
+= "das vezes que a resposta certa era X, quantas o modelo acertou"; **macro-recall** = média dos
+recalls de todas as classes — dá o mesmo peso às portas (raras e vitais) e ao "nada" (comum).
+
+**Wall-clock** — tempo de relógio de parede, o tempo REAL. Relevante porque o jogo roda em tempo
+real: energia, duração da noite e o risco do Foxy contam segundos de verdade, não "passos" (que têm
+duração variável).
+
+**Rollout / minibatch / épocas** — um ciclo do PPO: **rollout** = jogar n_steps (4096) passos e
+guardar as experiências; o lote é fatiado em **minibatches** (256) para calcular gradientes; e é
+reusado por **n_epochs** (4) passadas antes de ser descartado. Reusar demais "super-otimiza" o lote
+e colapsa a entropia — daí n_epochs baixo + freio de KL.
+
+**Clip de reward / normalização** — o `VecNormalize` divide as recompensas por uma medida da sua
+variabilidade (para o crítico não lidar com escalas malucas) e depois **clipa** o resultado num
+teto. Com o teto default (10), a vitória (+500 normalizada ≈ +2641) e a morte (−528) eram achatadas
+no MESMO ±10 — para o gradiente, vencer ≈ não morrer. Teto 100 deixa os terminais passarem com a
+proporção 5:1 desenhada.

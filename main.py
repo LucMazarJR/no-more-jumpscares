@@ -12,7 +12,7 @@ def encontrar_ultimo_modelo() -> str | None:
     Preferência: maior número de steps no nome; senão, o .zip mais recente.
     Modelos '*merged*' não têm mais prioridade — fazer média de pesos entre
     modelos treinados de inicializações diferentes produz uma política
-    quebrada (ver aviso em merge_modelos.py).
+    quebrada (ver aviso em scripts/merge_modelos.py).
     """
     def extrair_steps(path):
         m = re.search(r"_(\d+)_steps\.zip$", path)

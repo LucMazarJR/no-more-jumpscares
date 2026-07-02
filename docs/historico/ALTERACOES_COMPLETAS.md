@@ -1,5 +1,9 @@
 # Alterações do ambiente — histórico técnico
 
+> 📦 **HISTÓRICO** — registro das correções até junho/2026 (pré-pacote BC). Valores citados
+> (recompensas −500/+1000, n_steps=2048/8192 etc.) são da época e foram alterados depois.
+> Estado atual: [../PACOTE_BC_ENTROPIA.md](../PACOTE_BC_ENTROPIA.md) · índice: [../README.md](../README.md).
+
 Documento de referência para as mudanças feitas no ambiente de RL do FNAF 1.
 
 ---
@@ -42,7 +46,7 @@ o consumo em ~50% em relação ao jogo real.
 ### 5. Recompensas terminais reescalonadas (−500/+1000 → −100/+500)
 
 Magnitudes terminais extremas dominavam a função de valor. Ver nota em
-`docs/REFERENCIA_HIPERPARAMETROS.md`.
+`docs/REFERENCIA_HIPERPARAMETROS.md` (um nível acima desta pasta).
 
 ### 6. Gates de detecção por tempo real + trava de segurança
 

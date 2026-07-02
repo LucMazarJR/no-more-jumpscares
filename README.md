@@ -7,9 +7,13 @@ de mouse/teclado. O objetivo é treinar uma IA para sobreviver
 
 **Visão Geral**
 
-- **Entrada:** screenshots do jogo (captura de janela) + vetor de 7 estados internos
-- **Ações:** cliques nas posições mapeadas (portas, luzes, câmeras)
-- **Algoritmo:** PPO via `stable_baselines3`
+- **Entrada:** screenshots do jogo (captura de janela, 84×84) + vetor de 12 estados internos
+- **Ações:** cliques nas posições mapeadas (portas, luzes, câmeras) — 17 ações discretas
+- **Algoritmo:** PPO via `stable_baselines3`, com warmstart por Behavioral Cloning
+
+> **Fase atual (julho/2026):** pacote BC + termostato de entropia + currículo automático —
+> runbook e porquês em [docs/PACOTE_BC_ENTROPIA.md](docs/PACOTE_BC_ENTROPIA.md).
+> Índice de toda a documentação: [docs/README.md](docs/README.md).
 
 **Pré-requisitos**
 
@@ -110,7 +114,7 @@ python main.py treino --novo
 python main.py jogar
 ```
 
-> **Nota sobre merge de modelos:** `merge_modelos.py` (média de pesos) só é
+> **Nota sobre merge de modelos:** `scripts/merge_modelos.py` (média de pesos) só é
 > válido para checkpoints da mesma linhagem de treino. Para modelos treinados
 > do zero em PCs diferentes, a média produz uma política quebrada — escolha o
 > melhor modelo e continue o treino dele. O script agora exige `--force`.
@@ -188,8 +192,11 @@ Observações e dicas
 
 Arquivos úteis
 
+- **Índice da documentação: [docs/README.md](docs/README.md)** (dos docs vivos aos históricos)
 - Código do ambiente: [src/environment/fnaf_env.py](src/environment/fnaf_env.py)
 - Scripts de calibração: [src/utils/calibrar.py](src/utils/calibrar.py), [src/utils/calibrar_por_passos.py](src/utils/calibrar_por_passos.py)
 - Captura de tela: [src/utils/capture.py](src/utils/capture.py)
-- Histórico de alterações: [docs/ALTERACOES_COMPLETAS.md](docs/ALTERACOES_COMPLETAS.md)
-- Logs de treino: `logs/` (TensorBoard e desyncs em `logs/`)
+- Histórico de alterações: [docs/historico/ALTERACOES_COMPLETAS.md](docs/historico/ALTERACOES_COMPLETAS.md)
+- Logs de treino: `logs/treino.log` (enxuto, leitura de execução) · `logs/analise/`
+  (detalhado p/ análise: causa/energia por episódio) · `logs/tensorboard/` (eventos TB;
+  `tensorboard --logdir logs` funciona igual) · `logs/desyncs.log`

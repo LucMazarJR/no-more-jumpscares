@@ -43,8 +43,9 @@ onde morreu em vez de voltar para a 1).
 
 ### 2.1. Tipo de desfecho — separa *skill* de *sorte* (campo `Causa:`)
 
-A win rate sozinha mistura vitórias por **gestão** com vitórias por **sorte do apagão**. O log
-agora registra a causa de cada desfecho terminal, e o script quebra por noite:
+A win rate sozinha mistura vitórias por **gestão** com vitórias por **sorte do apagão**. A causa
+de cada desfecho terminal fica registrada no log **detalhado** (`logs/analise/treino_detalhado.log`
+— o `treino.log` de execução fica enxuto de propósito), e o script quebra por noite:
 
 | rótulo | o que é | o que diz |
 |--------|---------|-----------|
@@ -65,7 +66,8 @@ script imprime a tabela e um diagnóstico automático da noite com mais amostra.
 ```bash
 python scripts/metricas_treino.py                 # janela padrão = 150 eps
 python scripts/metricas_treino.py --janela 200
-python scripts/metricas_treino.py --log logs/treino.log --janela 100
+python scripts/metricas_treino.py --log logs/analise/treino_detalhado.log --janela 100
+# (sem --log, o script já prefere o detalhado e cai no treino.log enxuto se não existir)
 ```
 
 Saída (exemplo):
@@ -104,6 +106,9 @@ script já aplica essa heurística e imprime uma sugestão; trate-a como dica, n
 
 > **Como alternar:** edite `FNAF_RESET_METODO` no `.env` (`new_game` ou `continue`) e
 > reinicie o treino. A troca só vale em processo novo (o `.env` é lido na importação).
+> A **noite-alvo** do `continue`, por outro lado, é promovida AUTOMATICAMENTE pelo
+> `CurriculumCallback` (50% na janela de 30 eps da noite alvo) e persiste em
+> `modelos/curriculo.json` — não precisa editar `FNAF_NOITE_DESEJADA` a cada avanço.
 
 ### Cuidado com `continue` por tempo demais
 `continue` faz o agente "morar" numa noite só. Em excesso, arrisca:
@@ -160,12 +165,10 @@ da queda.
    `modelos/descartados/`). O desejado passa a ser o "mais avançado".
 2. Rode `python main.py treino` normalmente.
 
-**Caveat — normalização:** os `.zip` de checkpoint **não** embutem as estatísticas do
-`VecNormalize` (`modelos/vecnormalize.pkl`), que só é salvo ao **fim** de cada run. Então um
-rollback não é bit-exato: você volta os pesos do modelo, mas as stats de normalização de
-recompensa são as do último encerramento. O impacto costuma ser pequeno (as stats variam devagar),
-mas tenha em mente ao comparar antes/depois. Para um retorno mais limpo, guarde uma cópia do
-`vecnormalize.pkl` junto de checkpoints importantes.
+**Normalização:** cada checkpoint salva JUNTO o seu `*_vecnormalize_N_steps.pkl` pareado
+(`save_vecnormalize=True`), e ao retomar o treino prefere o `.pkl` do próprio checkpoint —
+o rollback volta pesos **e** stats de normalização casados. Só checkpoints muito antigos
+(anteriores a essa mudança) caem no `modelos/vecnormalize.pkl` global do fim do run.
 
 ---
 

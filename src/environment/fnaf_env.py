@@ -577,7 +577,7 @@ class FNAFEnv(gym.Env):
 
         observacao = {
             "imagem": np.zeros((ALTURA, LARGURA, 1), dtype=np.uint8),
-            # Deriva do espaço (10 estados após a ameaça da Decisão 4) p/ não divergir
+            # Deriva do espaço (hoje 12 estados) p/ não divergir quando a observação mudar
             "estados": np.zeros(self.observation_space["estados"].shape, dtype=np.float32)
         }
         return observacao, recompensa, True, False, info
@@ -1023,16 +1023,6 @@ class FNAFEnv(gym.Env):
         # acompanhar o relógio do jogo, não a soma de STEP_DELAY.
         self.tempo_jogo = time.perf_counter() - (self.episode_start_time or time.perf_counter())
     
-    def _energia_esperada(self) -> float:
-        t = self.tempo_jogo
-        for i in range(len(CHECKPOINTS_NOITE) - 1):
-            t0, e0 = CHECKPOINTS_NOITE[i]
-            t1, e1 = CHECKPOINTS_NOITE[i + 1]
-            if t <= t1:
-                frac = (t - t0) / (t1 - t0)
-                return e0 + frac * (e1 - e0)
-        return 5.0
-
     def _tempo_sem_camera(self) -> float:
         """Segundos REAIS desde a última vez que a câmera esteve aberta (0 se aberta agora ou
         antes do 1º uso). É a MESMA grandeza usada pelo risco do Foxy no Φ e exposta como 12º

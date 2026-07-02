@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Metricas POR NOITE do treino, lidas de logs/treino.log.
+"""Metricas POR NOITE do treino, lidas de logs/analise/treino_detalhado.log
+(fallback: logs/treino.log, o log enxuto de execucao — logs antigos ou sem causa).
 
 A "Taxa vitoria" que aparece no log do treino e AGREGADA (todas as noites juntas) e engana
 para decisoes de curriculo: conforme o agente domina a noite 1, ele chega mais na 2 e morre
@@ -15,7 +16,7 @@ Uso:
     python scripts/metricas_treino.py
     python scripts/metricas_treino.py --janela 150
     python scripts/metricas_treino.py --metodo continue --noite-desejada 4
-    python scripts/metricas_treino.py --log logs/treino.log --janela 200
+    python scripts/metricas_treino.py --log logs/analise/treino_detalhado.log --janela 200
 
 Ver docs/MONITORAMENTO_TREINO.md para a interpretacao e as regras de decisao.
 """
@@ -345,7 +346,9 @@ def recomendar(por: dict, metodo: str, noite_desejada: int) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Metricas por noite do treino FNAF.")
-    parser.add_argument("--log", type=Path, default=Path("logs/treino.log"))
+    # Default: o log DETALHADO de análise (tem "Causa:" em toda linha — habilita a quebra
+    # skill vs sorte). Fallback: o treino.log enxuto (logs antigos, sem causa).
+    parser.add_argument("--log", type=Path, default=None)
     parser.add_argument("--janela", type=int, default=150, help="ultimos N episodios (padrao 150)")
     parser.add_argument("--metodo", choices=["new_game", "continue"],
                         help="sobrescreve FNAF_RESET_METODO do .env")
@@ -354,6 +357,10 @@ def main() -> None:
     parser.add_argument("--env", type=Path, default=Path(".env"),
                         help="caminho do .env p/ ler metodo/noite (padrao .env)")
     args = parser.parse_args()
+
+    if args.log is None:
+        detalhado = Path("logs/analise/treino_detalhado.log")
+        args.log = detalhado if detalhado.exists() else Path("logs/treino.log")
 
     if not args.log.exists():
         raise SystemExit(f"Log nao encontrado: {args.log}")

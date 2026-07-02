@@ -72,11 +72,11 @@ if __name__ == "__main__":
     if "--force" not in sys.argv:
         print("Para confirmar que os modelos vêm da mesma linhagem de treino,")
         print("rode novamente com a flag --force:")
-        print("  python merge_modelos.py --force modelo1.zip modelo2.zip [...]")
+        print("  python scripts/merge_modelos.py --force modelo1.zip modelo2.zip [...]")
         sys.exit(1)
 
     if len(args) < 2:
-        print("Uso: python merge_modelos.py --force modelo1.zip modelo2.zip [modelo3.zip ...]")
+        print("Uso: python scripts/merge_modelos.py --force modelo1.zip modelo2.zip [modelo3.zip ...]")
         sys.exit(1)
 
     merge_modelos(args)

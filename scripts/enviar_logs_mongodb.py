@@ -80,6 +80,9 @@ def carregar_env(caminho: Path = Path(".env")) -> None:
 
 def detectar_fontes_log() -> list[Path]:
     candidatos = [
+        # Preferência: o log DETALHADO de análise (tem Energia fim + Causa em toda linha).
+        # O logs/treino.log enxuto fica como fallback p/ logs antigos.
+        Path("logs/analise/treino_detalhado.log"),
         Path("logs/treino.log.txt"),
         Path("logs/treino.log"),
         Path("logs_analysis/episodes.csv"),
@@ -98,14 +101,10 @@ def detectar_fontes_log() -> list[Path]:
         return fontes
 
     raise FileNotFoundError(
-        "Nenhum log encontrado. Esperado: logs/treino.log.txt, logs/treino.log, "
-        "logs_analysis/episodes.csv ou logs/**/events.out.tfevents*"
+        "Nenhum log encontrado. Esperado: logs/analise/treino_detalhado.log, "
+        "logs/treino.log.txt, logs/treino.log, logs_analysis/episodes.csv "
+        "ou logs/**/events.out.tfevents*"
     )
-
-
-def detectar_fonte_log() -> Path:
-    fontes = detectar_fontes_log()
-    return fontes[0]
 
 
 def para_numero(valor: str) -> int | float | str | None:

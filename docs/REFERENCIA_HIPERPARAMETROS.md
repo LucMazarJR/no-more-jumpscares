@@ -8,20 +8,26 @@ o que os logs estão mostrando e prever o efeito de qualquer ajuste.
 > o guia didático **[GUIA_CONCEITOS_E_FUNCIONAMENTO.md](GUIA_CONCEITOS_E_FUNCIONAMENTO.md)**. Este
 > aqui é de **consulta rápida** de hiperparâmetros.
 >
-> **Valores atuais (fonte: código — bundle anti-colapso):** `gamma=0.997`, `n_steps=8192`,
-> `batch_size=256`, `n_epochs=4`, `target_kl=0.03`, `learning_rate` linear 3e-4→3e-5, e `ent_coef`
-> 0.02→0.01 via `EntropiaSchedule` (gate em **40%** de vitória). Todos sobrescrevíveis por env var
-> (`FNAF_N_STEPS`, `FNAF_BATCH_SIZE`, `FNAF_N_EPOCHS`, `FNAF_TARGET_KL`, `FNAF_ENT_INICIO/FIM/GATE`).
+> **Valores atuais (fonte: código — pacote BC+entropia de julho/2026):** `gamma=0.997`,
+> `n_steps=4096`, `batch_size=256`, `n_epochs=4`, `target_kl=0.03`, `clip_reward=100`,
+> `learning_rate` linear 3e-4→3e-5, e `ent_coef` **adaptativo** via `ControladorEntropia`
+> (termostato: alvo de entropia 1.5→0.75 nats, coeficiente em [0.003, 0.03], inicial 0.02).
+> Env vars: `FNAF_N_STEPS`, `FNAF_BATCH_SIZE`, `FNAF_N_EPOCHS`, `FNAF_TARGET_KL`,
+> `FNAF_CLIP_REWARD`, `FNAF_ENT_INICIO`, `FNAF_H_INICIO/H_FIM`, `FNAF_ENT_MIN/MAX/GANHO/PASSO_MAX`,
+> `FNAF_CURRICULO_LIMIAR`. Detalhes e porquês: [PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md).
 > Onde uma seção abaixo citar um valor antigo no exemplo, o **valor atual prevalece**.
 
 ---
 
 ## Coeficiente de entropia (`ent_coef`)
 
-**Valor atual:** `0.02` inicial, decaindo até `0.01` via `EntropiaSchedule` — o decaimento só
-começa **depois** que a taxa de vitória (janela de 50 episódios) cruza **40%** (o "gate"). Nunca vai
-a zero. (Foi 0.03; baixado após diagnóstico de que a política ficava aleatória demais p/ conservar
-energia. Os exemplos abaixo usam o antigo `0.01` fixo; a explicação do conceito segue válida.)
+**Valor atual:** ADAPTATIVO. O `ControladorEntropia` (termostato) mede a entropia H real da
+política a cada rollout e ajusta o `ent_coef` para ela seguir um alvo que decai devagar
+(1.5 → 0.75 nats ao longo do treino), com coeficiente limitado a `[0.003, 0.03]` e valor inicial
+`0.02`. Substituiu o antigo `EntropiaSchedule` (gate por win_rate): não existia valor FIXO certo —
+0.03 deixava a política aleatória demais p/ conservar energia e 0.02 colapsava; e o gate nunca
+abria quando o agente estagnava abaixo dele. (Os exemplos abaixo citam valores fixos antigos; a
+explicação do conceito segue válida.)
 
 ### O que é
 
@@ -63,25 +69,23 @@ ou descansar para conservar energia.
 | Mesma sequência de ações por episódio | Estratégia muda gradualmente | Sem convergência visível |
 | SYNC camera próximo de zero (evita câmeras) | SYNC camera variável, uso de câmera crescente | Comportamento caótico |
 
-### Como ajustar
+### Como ajustar (no controlador, mexa no ALVO, não no coeficiente)
 
-O valor 0.01 é um ponto de partida razoável para este ambiente. As situações em
-que faz sentido mexer:
+Com o termostato, o `ent_coef` se ajusta sozinho — os botões são os **alvos e limites**:
 
-**Aumentar para 0.02–0.05** se:
-- Após 200k steps, o agente ainda repete a mesma sequência de ações
-- A distribuição de ações nos logs mostra uma ação dominando >70% do tempo
-- Os logs mostram SYNC camera ≈ 0 (câmera sendo evitada sistematicamente)
+**Política aleatória demais** (morre por apagão, `morte_energia` dominante em `custom/causas`):
+- baixar `FNAF_H_INICIO` (ex.: 1.5 → 1.2) — menos "ações efetivas" no começo.
 
-**Reduzir para 0.005** se:
-- Após 300k steps, a recompensa melhorou mas está muito ruidosa sem estabilizar
-- Vitórias apareceram mas a taxa não está crescendo (agente não consolida)
-- O agente alterna entre estratégias boas e ruins de forma aleatória
+**Política colapsando mesmo com o controlador** (`custom/entropia` < 0.3 com `custom/ent_coef`
+saturado no teto por >10 rollouts):
+- subir `FNAF_ENT_MAX` (0.03 → 0.04) e/ou `FNAF_H_INICIO` (1.5 → 1.6).
 
-**Nunca reduzir para 0.0 antes de atingir taxa de vitória estável**, pois a política
-pode congelar num padrão subótimo. Após atingir, por exemplo, 30% de vitória de forma
-consistente, reduzir gradualmente ajuda a refinar a estratégia sem perder o que foi
-aprendido.
+**`custom/ent_coef` serrilhando (oscilação com período 2):**
+- reduzir `FNAF_ENT_GANHO` (0.7 → 0.4).
+
+**Nunca deixar o alvo chegar a 0** (`FNAF_H_FIM` ≥ ~0.5): política totalmente determinística
+congela em padrão subótimo. O que observar no tensorboard: `custom/entropia` deve rastrear
+`custom/h_alvo` com |erro| < 0.3 na maior parte do tempo.
 
 ---
 
@@ -108,14 +112,14 @@ significativa — é aproximadamente `1 / (1 − γ)`:
 | 0.995 | ~200 steps       |
 | 0.999 | ~1000 steps      |
 
-### Por que 0.995 neste projeto
+### Por que 0.997 neste projeto
 
 Uma noite do FNAF tem ~700 steps (com step real de ~0.7s). A recompensa de vitória
 (+500) está no step ~700. Com gamma=0.99, essa recompensa vale `0.99^700 ≈ 0.0005`
 no step inicial — praticamente zero, o agente não "sente" que sobreviver importa.
-Com gamma=0.995, vale `0.995^700 ≈ 0.015` — ainda pequeno, mas suficiente para
-criar gradiente em direção à sobrevivência (reforçado pelos bônus de checkpoint
-de hora, que chegam bem antes).
+Com gamma=0.997, vale `0.997^700 ≈ 0.12` — pequeno, mas suficiente para criar
+gradiente em direção à sobrevivência (reforçado pelos bônus de marco de hora,
+que chegam bem antes).
 
 ### Efeito observável
 
@@ -136,14 +140,18 @@ entre 0.993 e 0.997 são razoáveis.
 
 ## Passos por atualização (`n_steps`)
 
-**Valor atual:** `8192` (era `2048` — bundle anti-colapso)
+**Valor atual:** `4096` (histórico: 2048 → 8192 no bundle anti-colapso → **4096** no pacote BC)
 
 ### O que é
 
 O PPO coleta exatamente `n_steps` de experiência (pares estado-ação-recompensa)
 antes de fazer uma atualização da política. Com episódios de ~560–700 steps,
-`n_steps=8192` (atual) equivale a ver aproximadamente **~11 episódios completos** antes
-de cada update.
+`n_steps=4096` (atual) equivale a ver aproximadamente **~5-6 episódios completos** antes
+de cada update — 1 update a cada ~48 min de jogo real.
+
+**Por que desceu de 8192:** o rollout gigante protegia bem uma política inicial RUIM, mas
+custava 1 update a cada ~95 min. Com o BC warmstart a política já parte decente e a
+FREQUÊNCIA de updates volta a importar — 4096 dobra os updates mantendo diversidade razoável.
 
 ### Efeito nos gradientes
 
@@ -157,8 +165,9 @@ em termos de timesteps totais para convergir. Pode ajudar quando episódios têm
 muita variância natural (como FNAF, onde os animatrônicos se movem de forma
 semi-aleatória).
 
-**Ajuste recomendado se a recompensa estiver muito ruidosa:** aumentar para 4096
-para estabilizar os gradientes sem alterar outros parâmetros.
+**Ajuste recomendado se a recompensa estiver muito ruidosa:** subir para 8192
+(`FNAF_N_STEPS`) para estabilizar os gradientes — pagando metade da frequência de updates.
+Lembre: n_steps define o rollout buffer, só vale em treino FRESCO (`--novo`).
 
 ---
 
@@ -190,7 +199,8 @@ e pouco diversos, reusar 10× super-otimizava a política e colapsava a entropia
 
 ## Learning rate (`learning_rate`)
 
-**Valor atual:** `3e-4` (0.0003)
+**Valor atual:** schedule linear `3e-4 → 3e-5` (decai ao longo do treino; piso ≠ 0 para
+não congelar retomadas)
 
 ### O que é
 
@@ -207,10 +217,9 @@ causa aprendizado lento.
 - Recompensa melhora muito lentamente mesmo com muitas atualizações
 - O modelo não está "esquecendo" comportamentos ruins
 
-O valor `3e-4` é o padrão recomendado pelo SB3 para PPO e funciona bem na maioria
-dos casos. Uma alternativa caso o aprendizado esteja instável é usar um **learning
-rate schedule** que reduz gradualmente (`linear` ou `cosine_decay`), disponível
-via `learning_rate=lambda progress: 3e-4 * (1 - progress)` no SB3.
+O `3e-4` inicial é o padrão recomendado pelo SB3 para PPO. O projeto JÁ usa o schedule
+linear com piso (`linear(3e-4, 3e-5)` em `train.py`): começa no padrão e decai conforme o
+progresso do treino — refina no fim sem congelar retomadas.
 
 ---
 
@@ -225,10 +234,14 @@ intermediárias densas que guiam o aprendizado.
 
 > **Nota (junho/2026):** os valores terminais eram −500/+1000 e foram reduzidos
 > para −100/+500. Magnitudes terminais muito maiores que a recompensa por step
-> (~0.5) dominam a função de valor: o crítico precisa prever alvos com variância
-> enorme concentrada em um único step, o que torna o aprendizado do valor lento e
-> ruidoso. O retorno do episódio continua monotônico no tempo de sobrevivência
-> (morrer mais tarde sempre rende mais que morrer cedo).
+> (hoje ~0.08 — orçamento denso de ~60 por noite + marcos de 3.0/hora) dominam a
+> função de valor: o crítico precisa prever alvos com variância enorme concentrada
+> em um único step. O retorno do episódio continua monotônico no tempo de
+> sobrevivência (morrer mais tarde sempre rende mais que morrer cedo).
+> **Complemento (julho/2026):** o `clip_reward=100` do VecNormalize garante que os
+> terminais normalizados passem inteiros (o default 10 clipava vitória e morte no
+> MESMO teto — razão 5:1 virava 1:1 no gradiente; medido em
+> `scripts/inspecionar_vecnormalize.py`).
 
 ### Riscos
 
@@ -289,8 +302,8 @@ o agente age de forma míope — ignora o que acontece na segunda metade da noit
 Se for muito maior, o agente tenta otimizar além do episódio, o que é matematicamente
 inconsistente e desestabiliza o treinamento.
 
-Para este projeto: episódio ~700 steps, horizonte efetivo com γ=0.995 é ~200 steps.
-O agente "enxerga" apenas os próximos ~2–3 minutos de jogo por vez. Isso é suficiente
+Para este projeto: episódio ~700 steps, horizonte efetivo com γ=0.997 é ~333 steps.
+O agente "enxerga" os próximos ~4 minutos de jogo por vez. Isso é suficiente
 para aprender a gerenciar energia e câmeras, mas significa que ações tomadas nos
 primeiros steps da noite têm menos peso na estimativa de valor do que idealmente
 teriam.
@@ -298,13 +311,12 @@ teriam.
 ### Curriculum learning
 
 Técnica de treinar primeiro em versões mais fáceis do problema e gradualmente
-aumentar a dificuldade. Para este projeto, uma forma de aplicar seria limitar o
-episódio a sobreviver até 2AM inicialmente (truncar após ~178s de jogo), depois
-expandir para 4AM, depois para 6AM. O agente aprende sub-tarefas menores antes
-de lidar com a noite completa.
-
-Ainda não implementado, mas seria útil se o treinamento continuar estagnado após
-atingir 200k timesteps sem vitórias com a configuração atual.
+aumentar a dificuldade. **Implementado (julho/2026)** via `CurriculumCallback`: a
+noite-alvo do modo `continue` é promovida automaticamente quando a janela de 30
+episódios da noite alvo atinge `FNAF_CURRICULO_LIMIAR` (50%), persistindo em
+`modelos/curriculo.json` (retomadas mantêm o alvo). As noites anteriores continuam
+aparecendo no caminho (mortes acima do alvo reescalam do 1) — mistura natural contra
+esquecimento. Ver `docs/MONITORAMENTO_TREINO.md` §4.
 
 ### Observação multimodal (Dict space)
 
@@ -314,51 +326,58 @@ chave por seu próprio extrator. Neste projeto, a chave `"imagem"` passa pela CN
 recebem como entrada.
 
 Isso é relevante porque **mudanças na dimensão de qualquer campo invalidam o modelo
-salvo**. Se o número de estados mudar de 8 para 9, o `Linear(8, 32)` do MLP não
-carrega os pesos antigos. Qualquer modificação no `observation_space` exige reinício
-do treinamento do zero.
+salvo**. Hoje são **12 estados** (o 12º, `tempo_sem_camera`, entrou no pacote de julho/2026);
+se virarem 13, o `Linear` de entrada do MLP não carrega os pesos antigos (o extractor já
+deriva a dimensão do espaço, mas os PESOS não migram). Qualquer modificação no
+`observation_space` exige reinício do treinamento do zero.
 
 ---
 
-## Decisão 6 — bundle de schedules: o que mudou junto e como isolar
+## Schedules em uso (gamma, learning rate, entropia): o que mudou junto e como isolar
 
-**Aplicado (junho/2026).** Os 3 botões mudaram **de uma vez** (bundle pragmático — amostra é o
-recurso escasso, 3-4 runs isolados sai caro). Por isso este guia: se o bundle **piorar**, reverter
-**um botão por vez** ao valor de controle e re-treinar uma janela curta para achar o culpado.
+**Histórico:** a Decisão 6 (junho/2026) introduziu o bundle gamma 0.997 + LR linear +
+`EntropiaSchedule` gateado por win_rate. Em julho/2026 o pacote BC substituiu o schedule de
+entropia pelo `ControladorEntropia` (termostato — ver seção `ent_coef` acima e
+[PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md)). O que vale HOJE:
 
-**O que está no bundle:**
-- `gamma`: 0.995 → **0.997** (horizonte ~200 → ~333 steps; a vitória propaga melhor pro início).
+- `gamma`: **0.997** (horizonte ~333 steps; a vitória propaga melhor pro início).
   Em `fnaf_env.GAMMA` (fonte única: PPO + VecNormalize + shaping Φ). **Só em treino fresco.**
-- `learning_rate`: 3e-4 fixo → **`linear(3e-4, 3e-5)`** — decai ao longo do treino; **piso 3e-5**
+- `learning_rate`: **`linear(3e-4, 3e-5)`** — decai ao longo do treino; **piso 3e-5**
   (não 0) para não congelar a retomada (o `progress_remaining` reinicia a cada `learn()`).
-- `ent_coef`: 0.01 → **0.02 inicial, decai até 0.005** via callback `EntropiaSchedule`, **gateado**
-  pela taxa de vitória (≥20% numa janela de 50 episódios) — só consolida (decai) **depois de
-  começar a vencer**; nunca vai a 0.
+- `ent_coef`: **adaptativo** via `ControladorEntropia` (alvo H 1.5→0.75 nats, coef em
+  [0.003, 0.03], inicial 0.02).
 
 **Mapa sintoma → botão culpado** (reusa os sintomas das seções acima):
 
-| sintoma nos logs (`treino.log` / tensorboard) | suspeito | reverter para |
+| sintoma nos logs (tensorboard / `logs/analise/`) | suspeito | o que fazer |
 |---|---|---|
-| crítico instável, loss diverge, vitória **aparece e some** bruscamente | gamma alto **ou** LR alto cedo | gamma 0.995 / LR fixo 3e-4 |
-| caótico, nunca converge, ação ~aleatória mesmo após muito treino | ent_coef alto | ent_coef 0.01 fixo |
-| **congela cedo**, repete a mesma ação, exploração some | ent_coef decaiu cedo (gate baixo) **ou** LR caiu rápido | subir o `gate` do `EntropiaSchedule` / piso do LR |
+| crítico instável, loss diverge, vitória **aparece e some** bruscamente | gamma alto **ou** LR alto cedo **ou** clip_reward alto | gamma 0.995 / LR fixo 3e-4 / `FNAF_CLIP_REWARD=50` |
+| caótico, nunca converge, ação ~aleatória mesmo após muito treino | alvo de H alto demais | `FNAF_H_INICIO=1.2` |
+| **congela cedo**, repete a mesma ação, exploração some | teto do ent_coef baixo p/ a pressão de colapso **ou** LR caiu rápido | `FNAF_ENT_MAX=0.04` + `FNAF_H_INICIO=1.6` / subir piso do LR |
 | aprende lento, não "esquece" comportamento ruim | piso de LR baixo demais | subir o piso (ex.: 1e-4) |
 
 **Lembretes:**
 - gamma ≥ 0.999 → horizonte > episódio → crítico instável; 0.997 está na faixa segura (0.993–0.997).
-- O `EntropiaSchedule` **não decai antes do gate** — se o agente nunca vence, `ent_coef` fica em 0.02
-  o treino todo (explora, não congela). Isso é proposital.
+- O termostato NUNCA leva a entropia a zero (`FNAF_H_FIM=0.75` e piso `FNAF_ENT_MIN=0.003`) —
+  consolida sem congelar. Isso é proposital.
 - **Medir sempre por taxa de vitória / tempo de sobrevivência**, nunca pela recompensa (muda entre
   versões). Salvar o controle (`modelos/*.zip` + `vecnormalize.pkl`) **antes** de treinar.
 
 ---
 
-## Decisão 7 — RecurrentPPO (LSTM): por que e como diagnosticar
+## RecurrentPPO (LSTM): por que, QUANDO, e como diagnosticar
 
-**Por que LSTM (não frame-stacking):** Foxy/Freddy **não são detectáveis por frame** (Foxy é um
-*buildup* de minutos; Freddy só aparece nas câmeras). Lidar com eles exige memória de **longo
+> **Fase atual: DESLIGADA (`FNAF_USAR_LSTM=0`).** O 12º estado (`tempo_sem_camera`) tornou o
+> risco do Foxy observável e as ameaças já são HELD (o detector guarda memória) — o motivo
+> original da LSTM sumiu, e o warmstart de BC só transfere 100% dos pesos no PPO feedforward.
+> **Gatilho para reabrir o A/B:** dominada a Noite 2, estagnar na 3+ com `morte_animatronico`
+> dominante SEM ameaça registrada no info terminal (= morrer do que não se vê sem memória,
+> ex.: Freddy). Ver [PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md) §2.7.
+
+**Por que LSTM (não frame-stacking):** Freddy **não é detectável por frame** (só aparece nas
+câmeras; seu avanço é um processo de minutos). Lidar com ele exigiria memória de **longo
 alcance** — frame-stacking (poucos frames) não cobre. A noite entra no estado p/ condicionar a
-agressividade (a LSTM aprende "noite 4 = Foxy mais rápido"). Ligar com `FNAF_USAR_LSTM=1`.
+agressividade (a LSTM aprenderia "noite 4 = mais rápido"). Ligar com `FNAF_USAR_LSTM=1`.
 
 **Começa pequena:** `lstm_hidden_size=128`, `n_lstm_layers=1`. Memória maior = mais parâmetros =
 mais amostra; só cresça se ajudar. **A/B contra o controle** (feedforward, `FNAF_USAR_LSTM=0`),

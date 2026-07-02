@@ -412,6 +412,7 @@ aprendendo. O `explained_variance` contou a verdade. **Cruze sempre.**
 
 - [REFERENCIA_HIPERPARAMETROS.md](REFERENCIA_HIPERPARAMETROS.md) — os "botões" do
   treino (learning rate, gamma, ent_coef...) e quando mexer em cada um.
-- [ALTERACOES_COMPLETAS.md](ALTERACOES_COMPLETAS.md) — histórico técnico das
-  mudanças no ambiente.
-- [MELHORIAS_PROJETO_ATUAL.md](MELHORIAS_PROJETO_ATUAL.md) — próximos passos.
+- [historico/ALTERACOES_COMPLETAS.md](historico/ALTERACOES_COMPLETAS.md) — histórico técnico das
+  mudanças no ambiente (📦 retrato de junho/2026).
+- [historico/MELHORIAS_PROJETO_ATUAL.md](historico/MELHORIAS_PROJETO_ATUAL.md) — ideias de melhoria
+  da época (📦; curriculum e BC já foram implementados — ver PACOTE_BC_ENTROPIA.md).

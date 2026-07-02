@@ -1,5 +1,10 @@
 # Melhorias para o projeto atual
 
+> 📦 **HISTÓRICO** — escrito em maio/2026, antes das implementações. Do que está aqui:
+> curriculum learning e BC warmstart FORAM implementados (pacote de julho/2026); RecurrentPPO
+> está pronto mas desligado nesta fase; simplificação de ações e paralelização não foram feitas.
+> Estado atual: [../PACOTE_BC_ENTROPIA.md](../PACOTE_BC_ENTROPIA.md) · índice: [../README.md](../README.md).
+
 Melhorias que podem ser aplicadas sem trocar o algoritmo base (PPO) nem a
 arquitetura fundamental do projeto. Cada seção descreve o problema que a melhoria
 resolve, como funciona e o que precisaria mudar no código.

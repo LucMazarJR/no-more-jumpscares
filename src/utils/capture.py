@@ -85,10 +85,6 @@ class GameCapture:
         pyautogui.moveTo(x_fim, y_fim, duration=duration, tween=pyautogui.easeInOutQuad)
         pyautogui.mouseUp()
 
-    def pressionar_tecla(self, tecla: str):
-        """Pressiona uma tecla do teclado."""
-        pyautogui.press(tecla)
-
     def atalho(self, *teclas: str):
         """Pressiona um atalho combinando varias teclas (ex.: alt+enter)."""
         pyautogui.hotkey(*teclas)
