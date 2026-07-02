@@ -8,34 +8,39 @@ Uso:
 Fluxo: rode o comando, navegue no jogo até a noite carregar, aperte F9 para começar a
 gravar, jogue até o 6AM (pelas TECLAS abaixo, não pelo mouse!) e aperte F10 para parar.
 
-O gravador espelha o pipeline do FNAFEnv de ponta a ponta, senão o BC aprende de uma
-distribuição que o RL nunca vê:
-  • captura a ÁREA CLIENTE da janela e redimensiona p/ a referência 1280x720 — mesma
-    região/escala de _capturar_janela (a janela inteira incluía barra de título/bordas);
-  • ameaças (Bonnie/Chica) rotuladas pela MESMA implementação do env (_atualizar_ameaca
-    de um FNAFEnv "fantasma" — init só carrega templates, não abre nem controla o jogo);
-  • tempo_sem_camera em segundos reais (12º estado da observação);
-  • rotulagem SEM shift: cada registro é (frame_t, ação decidida VENDO frame_t) — a ação
-    apertada entre a captura t e a t+1 fecha o registro t (antes a ação era associada ao
-    frame capturado DEPOIS do efeito dela, invertendo a causalidade que o BC deve clonar).
+FIDELIDADE POR CONSTRUÇÃO: o executor das ações é o PRÓPRIO FNAFEnv (um env "fantasma",
+cujo __init__ só carrega templates — não abre nem reseta o jogo). Cada tecla vira uma
+chamada a `env._executar_acao`, que aplica a MESMA coreografia do treino: delay de virada
+de cabeça (SIDE_SWITCH_DELAY) antes de clicar do outro lado, delay de saída de câmera,
+gesto de hover da prancheta, cooldowns de porta/câmera, pré-leitura e verificação do
+clique de porta pela cor do botão. O estado gravado é o estado do env — não existe mais
+uma cópia paralela da mecânica para dessincronizar. Também espelhado do step() do RL:
+  • luz ligada = botão SEGURADO durante a captura (corredor aceso NA IMAGEM, como o RL
+    vê — e requisito da detecção da Chica) + re-sync passivo da porta do mesmo lado;
+  • energia simulada re-ancorada pela FOTO (`_ler_energia` + validar_leitura_energia);
+  • ameaças rotuladas por `_atualizar_ameaca` (mesmos templates/debounce do treino);
+  • rotulagem SEM shift: registro = (frame_t, ação decidida VENDO frame_t).
+
+THREADING: handlers do `keyboard` rodam na thread de hook e o mss/pyautogui não são
+thread-safe — o handler só ENFILEIRA a tecla; o loop principal drena e executa no máximo
+1 ação por iteração, ANTES de capturar o próximo frame (mesma semântica do step do RL).
 """
 import cv2
 import json
 import os
 import sys
 import time
+from collections import deque
 from datetime import datetime
 
 import keyboard
-import pyautogui
 import pygetwindow as gw
 
-from src.utils.capture import GameCapture, melhor_janela, regiao_cliente
+from src.utils.capture import melhor_janela, regiao_cliente
 from src.environment.fnaf_env import (
-    FNAFEnv, COORDS, ACOES, LADO_POR_ACAO, SIDE_SWITCH_DELAY, WINDOW_TITLE, MAX_NOITE,
+    FNAFEnv, ACOES, COORDS, STEP_DELAY, WINDOW_TITLE, MAX_NOITE,
+    validar_leitura_energia,
 )
-
-cap = GameCapture()
 
 # ─── Mapeamento tecla → ação ──────────────────────────────────────
 TECLAS = {
@@ -57,149 +62,12 @@ TECLAS = {
     "-":   "camera_7",
 }
 
-# ─── Índice de câmera — espelha a fórmula do env (acao_num - 5) ──
-CAMERA_ID = {nome: num - 5 for num, nome in ACOES.items() if nome.startswith("camera_")}
-
-# Intervalo de captura do loop (segundos). Mais rápido que o step do RL (~0.7s) de
-# propósito: rende mais rótulos das ações RARAS (portas/luzes); o desbalanceio de
-# classes resultante é corrigido no treino do BC (WeightedRandomSampler).
+# Intervalo alvo do loop (segundos). Mais rápido que o step do RL (~0.7s) de propósito:
+# rende mais rótulos das ações RARAS (portas/luzes); o desbalanceio de classes é corrigido
+# no treino do BC (WeightedRandomSampler). Iterações com ação de troca de lado estouram o
+# período (delays da coreografia) — inofensivo: energia/tempo correm em wall-clock.
 _LOOP_DT = 0.25
 
-# Delay de virada de cabeça em frames de gravação (espelha SIDE_SWITCH_DELAY do env).
-# Esse delay também é o único bloqueio para re-pressionamento — não há cooldown separado.
-_PORTA_DELAY_FRAMES = max(1, round(SIDE_SWITCH_DELAY / _LOOP_DT))
-
-
-class EstadoJogo:
-    """Máquina de estado que espelha o FNAFEnv para registrar os estados internos
-    (portas, luzes, câmera, energia, tempo, tempo_sem_camera) ao lado de cada frame.
-
-    Portas: se o personagem precisa virar a câmera para o lado da porta
-    (SIDE_SWITCH_DELAY), o estado só é atualizado após _PORTA_DELAY_FRAMES
-    iterações. Enquanto essa mudança está pendente, novos presses são ignorados.
-    O delay em si é o único bloqueio — não há cooldown separado por steps.
-    """
-
-    def __init__(self):
-        self.porta_esq:     bool  = False
-        self.porta_dir:     bool  = False
-        self.luz_esq:       bool  = False
-        self.luz_dir:       bool  = False
-        self.camera_aberta: bool  = False
-        self.camera_ativa:  int   = 0       # 0 = nenhuma; 1–11 = câmera selecionada
-        self.energia:       float = 100.0
-        self._inicio:       float = 0.0
-        self._t_ultima_camera: float = 0.0  # base do tempo_sem_camera (12º estado)
-        self.lado_atual:    str   = "centro"
-        # Cada item: [frames_restantes, "esq"|"dir", novo_valor]
-        # A existência de uma pendência para um lado bloqueia novos presses daquele lado.
-        self._pendencias:   list  = []
-
-    def iniciar(self) -> None:
-        self._inicio = time.perf_counter()
-        self._t_ultima_camera = self._inicio   # noite começa "recém-checada", igual ao env
-
-    def _agendar_porta(self, lado: str, novo_valor: bool, delay: int) -> None:
-        if delay <= 0:
-            if lado == "esq":
-                self.porta_esq = novo_valor
-            else:
-                self.porta_dir = novo_valor
-        else:
-            self._pendencias.append([delay, lado, novo_valor])
-
-    def ao_pressionar(self, nome_acao: str) -> None:
-        lado_alvo = LADO_POR_ACAO.get(nome_acao)
-
-        if nome_acao == "porta_esquerda":
-            # Bloqueado apenas enquanto há uma virada de cabeça pendente para esse lado
-            if any(p[1] == "esq" for p in self._pendencias):
-                return
-            delay = _PORTA_DELAY_FRAMES if (lado_alvo and self.lado_atual != lado_alvo) else 0
-            self._agendar_porta("esq", not self.porta_esq, delay)
-
-        elif nome_acao == "porta_direita":
-            if any(p[1] == "dir" for p in self._pendencias):
-                return
-            delay = _PORTA_DELAY_FRAMES if (lado_alvo and self.lado_atual != lado_alvo) else 0
-            self._agendar_porta("dir", not self.porta_dir, delay)
-
-        elif nome_acao == "luz_esquerda":
-            if self.luz_esq:
-                self.luz_esq = False
-            else:
-                self.luz_esq = True
-                self.luz_dir = False          # mutuamente exclusivo
-
-        elif nome_acao == "luz_direita":
-            if self.luz_dir:
-                self.luz_dir = False
-            else:
-                self.luz_dir = True
-                self.luz_esq = False          # mutuamente exclusivo
-
-        elif nome_acao == "abrir_fechar_camera":
-            self.camera_aberta = not self.camera_aberta
-            if self.camera_aberta:
-                self.luz_esq = False
-                self.luz_dir = False
-            else:
-                self.camera_ativa = 0
-
-        elif nome_acao in CAMERA_ID:
-            if self.camera_aberta:
-                self.camera_ativa = CAMERA_ID[nome_acao]
-
-        # O personagem começa a virar no momento do clique
-        if lado_alvo:
-            self.lado_atual = lado_alvo
-
-    def atualizar(self) -> None:
-        """Chama a cada iteração do loop — processa pendências de porta e energia."""
-        proximas = []
-        for p in self._pendencias:
-            p[0] -= 1
-            if p[0] <= 0:
-                if p[1] == "esq":
-                    self.porta_esq = p[2]
-                else:
-                    self.porta_dir = p[2]
-            else:
-                proximas.append(p)
-        self._pendencias = proximas
-
-        if self.camera_aberta:
-            self._t_ultima_camera = time.perf_counter()   # mesma regra do env
-
-        itens = (
-            int(self.porta_esq) + int(self.porta_dir)
-            + int(self.luz_esq) + int(self.luz_dir)
-            + int(self.camera_aberta)
-        )
-        consumo = (0.104 + min(itens, 3) * 0.100) * _LOOP_DT
-        self.energia = max(0.0, self.energia - consumo)
-
-    def tempo_ep(self) -> float:
-        return time.perf_counter() - self._inicio
-
-    def tempo_sem_camera(self) -> float:
-        """Segundos reais desde a última câmera aberta (0 se aberta) — espelha o env."""
-        if self.camera_aberta:
-            return 0.0
-        return time.perf_counter() - self._t_ultima_camera
-
-    def como_dict(self) -> dict:
-        return {
-            "porta_esq":        int(self.porta_esq),
-            "porta_dir":        int(self.porta_dir),
-            "luz_esq":          int(self.luz_esq),
-            "luz_dir":          int(self.luz_dir),
-            "camera_aberta":    int(self.camera_aberta),
-            "camera_ativa":     self.camera_ativa,
-            "energia":          round(self.energia, 2),
-            "tempo_ep":         round(min(self.tempo_ep(), 535.0), 2),
-            "tempo_sem_camera": round(self.tempo_sem_camera(), 2),
-        }
 
 def acao_para_numero(nome_acao: str) -> int:
     for numero, nome in ACOES.items():
@@ -207,19 +75,6 @@ def acao_para_numero(nome_acao: str) -> int:
             return numero
     return 0
 
-def executar_acao_no_jogo(nome_acao: str):
-    """Executa a ação no jogo — clique simples ou arrasto para câmera."""
-    if nome_acao == "abrir_fechar_camera":
-        # Câmera precisa de clique e arrasto para cima
-        x, y = COORDS["abrir_fechar_camera"]
-        pyautogui.mouseDown(x, y)
-        time.sleep(0.05)
-        pyautogui.moveTo(x, y - 200, duration=0.2)  # arrasta para cima
-        pyautogui.mouseUp()
-
-    elif nome_acao in COORDS:
-        x, y = COORDS[nome_acao]
-        pyautogui.click(x, y)
 
 def _noite_da_cli() -> int:
     """--noite N obrigatório: cada sessão grava UMA noite, e o número vai no dataset.
@@ -243,98 +98,145 @@ def gravar():
     pasta = f"gameplay_{datetime.now().strftime('%Y%m%d_%H%M%S')}_noite{noite}"
     os.makedirs(f"dados/{pasta}/frames", exist_ok=True)
 
-    # Env "fantasma" p/ rotular ameaças com a MESMA implementação/templates do treino.
+    # Env fantasma = EXECUTOR das ações + fonte de estado + visão (ameaça/energia).
     # O __init__ do FNAFEnv só carrega templates e monta espaços — não abre o jogo.
-    env_cv = FNAFEnv()
+    env = FNAFEnv()
 
     print(f"=== Gravação da NOITE {noite} ===")
     print("Mapeamento de teclas (jogue por elas, não pelo mouse):")
     for tecla, acao in TECLAS.items():
         print(f"  [{tecla}] → {acao}")
+    print("\nAs ações têm os MESMOS delays do treino (virada de lado ~0.85s, saída de")
+    print("câmera ~0.65s, cooldowns) — o clique acontece quando o jogo aceita, não na tecla.")
     print("\nNavegue no jogo até a noite carregar e aperte [F9] para COMEÇAR a gravar.")
     print("[F10] → PARA a gravação (se o jogo fechar sozinho — Golden Freddy — aperte F10;")
     print("        a sessão parcial continua válida para o BC).\n")
 
-    estado    = EstadoJogo()
     dados     = []
     frame_idx = 0
-    acao_atual = "nada"
     registro_pendente = None
+    fila: deque[str] = deque()
 
-    # Registra handlers para cada tecla
+    # Handler roda na thread de hook do keyboard: SÓ enfileira (deque.append é atômico).
+    # Dedupe do topo absorve o auto-repeat de tecla segurada; os cooldowns do env seguram
+    # o resto (ação em cooldown volta inválida SEM clicar, igual ao treino).
     def fazer_handler(nome_acao):
-        def handler(event):
-            nonlocal acao_atual
-            acao_atual = nome_acao
-            estado.ao_pressionar(nome_acao)
-            executar_acao_no_jogo(nome_acao)
-            print(f"  [{event.name}] → {nome_acao} | E:{estado.energia:.1f}% "
-                  f"cam:{estado.camera_aberta} porta:{int(estado.porta_esq)}/{int(estado.porta_dir)}")
+        def handler(_event):
+            if not (fila and fila[-1] == nome_acao):
+                fila.append(nome_acao)
         return handler
 
     keyboard.wait("f9")            # hooks só DEPOIS do F9: menu/carregamento não contamina
-    hooks = []
-    for tecla, nome_acao in TECLAS.items():
-        h = keyboard.on_press_key(tecla, fazer_handler(nome_acao))
-        hooks.append(h)
+    hooks = [keyboard.on_press_key(tecla, fazer_handler(nome))
+             for tecla, nome in TECLAS.items()]
 
-    estado.iniciar()
+    # Espelha o fim do reset() do env: relógios ancorados no início da noite.
+    t0 = time.perf_counter()
+    env.episode_start_time = t0
+    env._t_ultima_energia  = t0
+    env._t_ultima_camera   = t0
     print(">>> Gravando! Jogue até o 6AM e aperte F10. <<<\n")
 
     try:
         while not keyboard.is_pressed("f10"):
-            t0 = time.perf_counter()
+            t_iter = time.perf_counter()
 
-            # Fecha o registro do frame ANTERIOR com a ação apertada desde aquela captura:
-            # par (obs_t, ação decidida vendo obs_t) — a convenção do MDP que o BC clona.
+            # (a) Drena e executa NO MÁXIMO 1 ação — pelo executor do env (coreografia,
+            # cooldowns e estado idênticos ao treino). "nada" também passa pelo executor
+            # p/ manter a semântica de ultima_acao/saída de câmera igual ao RL.
+            nome_acao = fila.popleft() if fila else "nada"
+            acao_valida = env._executar_acao(acao_para_numero(nome_acao))
+            if env._pixel_antes_porta is not None:
+                # Igual ao step(): espera a animação e confirma o clique pela cor do botão.
+                time.sleep(STEP_DELAY)
+                if not env._verificar_botao_porta(nome_acao):
+                    acao_valida = False
+                env._pixel_antes_porta = None
+            if nome_acao != "nada":
+                print(f"  {nome_acao:<20} [{'OK' if acao_valida else 'X '}] | "
+                      f"E:{env.energia:5.1f}% cam:{int(env.camera_aberta)} "
+                      f"porta:{int(env.porta_esq)}/{int(env.porta_dir)}")
+
+            # (b) Fecha o registro do frame ANTERIOR com a ação decidida VENDO aquele
+            # frame — a convenção (obs_t, ação_t) do MDP que o BC clona.
             if registro_pendente is not None:
-                registro_pendente["acao"] = acao_para_numero(acao_atual)
-                registro_pendente["nome"] = acao_atual
+                registro_pendente["acao"] = acao_para_numero(nome_acao)
+                registro_pendente["nome"] = nome_acao
                 dados.append(registro_pendente)
                 registro_pendente = None
-            acao_atual = "nada"
 
-            # Captura a ÁREA CLIENTE (mesma seleção de janela do env) e leva à referência
-            # 1280x720 — dela saem o frame 84x84 (dataset) e a detecção de ameaça.
             if not gw.getWindowsWithTitle(WINDOW_TITLE):
                 print("Jogo não encontrado! Aguardando... (F10 encerra)")
                 time.sleep(1)
                 continue
-            frame = cap.capturar_tela(regiao_cliente(melhor_janela(WINDOW_TITLE)))
+
+            # (c) Luz ligada = botão SEGURADO durante a captura (igual ao step do RL) +
+            # re-sync passivo da porta do mesmo lado pela cor do botão.
+            luz_segurada = None
+            if env.luz_esq:
+                luz_segurada = COORDS["luz_esquerda"]
+                env.capture.segurar_botao(*luz_segurada)
+                env._sync_porta_por_pixel("porta_esquerda")
+            elif env.luz_dir:
+                luz_segurada = COORDS["luz_direita"]
+                env.capture.segurar_botao(*luz_segurada)
+                env._sync_porta_por_pixel("porta_direita")
+
+            # (d) Captura a ÁREA CLIENTE → referência 1280x720 → frame 84x84 do dataset.
+            frame = env.capture.capturar_tela(regiao_cliente(melhor_janela(WINDOW_TITLE)))
             frame_cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            frame_ref   = cv2.resize(frame_cinza, env_cv._ref_size)
+            frame_ref   = cv2.resize(frame_cinza, env._ref_size)
             frame_pequeno = cv2.resize(frame_ref, (84, 84))
 
-            # Ameaça pela implementação do env: espelha câmera/luz (gates da detecção)
-            # e mantém o estado HELD entre frames dentro do env fantasma.
-            env_cv.camera_aberta = estado.camera_aberta
-            env_cv.luz_dir       = estado.luz_dir
-            env_cv._atualizar_ameaca(frame_ref)
+            # (e) Ameaças pela implementação do treino (estado HELD dentro do env).
+            env._atualizar_ameaca(frame_ref)
 
+            # (f) Solta a luz depois da captura (igual ao step).
+            if luz_segurada is not None:
+                env.capture.soltar_botao(*luz_segurada)
+
+            # (g) Energia: simulação wall-clock re-ancorada pela FOTO (photo-primary).
+            env._atualizar_energia()
+            env.energia = validar_leitura_energia(env._ler_energia(frame_ref), env.energia)
+
+            # (h) Relógios e cooldowns (0.25s/tick — o dimensionamento original dos
+            # cooldowns, que cobrem as animações de ~0.75-1.0s).
+            env._atualizar_cooldowns()
+            env._atualizar_tempo()
+            if env.camera_aberta:
+                env._t_ultima_camera = time.perf_counter()
+
+            # (i) Registro pendente lido DIRETO do env (campos idênticos aos do RL).
             caminho_frame = f"dados/{pasta}/frames/{frame_idx:06d}.png"
             cv2.imwrite(caminho_frame, frame_pequeno)
-
             registro_pendente = {
-                "frame":      caminho_frame,
-                "noite":      noite,
-                "ameaca_esq": int(env_cv.ameaca_esq),
-                "ameaca_dir": int(env_cv.ameaca_dir),
+                "frame":            caminho_frame,
+                "noite":            noite,
+                "porta_esq":        int(env.porta_esq),
+                "porta_dir":        int(env.porta_dir),
+                "luz_esq":          int(env.luz_esq),
+                "luz_dir":          int(env.luz_dir),
+                "camera_aberta":    int(env.camera_aberta),
+                "camera_ativa":     env.camera_ativa,
+                "energia":          round(env.energia, 2),
+                "tempo_ep":         round(min(env.tempo_jogo, 535.0), 2),
+                "tempo_sem_camera": round(env._tempo_sem_camera(), 2),
+                "ameaca_esq":       int(env.ameaca_esq),
+                "ameaca_dir":       int(env.ameaca_dir),
             }
-            registro_pendente.update(estado.como_dict())
-
             frame_idx += 1
-            estado.atualizar()
-            # Mantém o período do loop estável (captura+CV têm custo variável)
-            time.sleep(max(0.0, _LOOP_DT - (time.perf_counter() - t0)))
+
+            # (j) Compasso do loop (captura/coreografia têm custo variável).
+            time.sleep(max(0.0, _LOOP_DT - (time.perf_counter() - t_iter)))
 
     finally:
-        # Remove todos os hooks de teclado
         keyboard.unhook_all()
 
-    # Último frame pendente: fecha com a ação acumulada até o F10
+    # Último frame pendente: fecha com a próxima ação da fila (ou nada)
     if registro_pendente is not None:
-        registro_pendente["acao"] = acao_para_numero(acao_atual)
-        registro_pendente["nome"] = acao_atual
+        nome_acao = fila.popleft() if fila else "nada"
+        registro_pendente["acao"] = acao_para_numero(nome_acao)
+        registro_pendente["nome"] = nome_acao
         dados.append(registro_pendente)
 
     # Salva dataset

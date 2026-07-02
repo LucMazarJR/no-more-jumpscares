@@ -14,7 +14,10 @@ o que os logs estão mostrando e prever o efeito de qualquer ajuste.
 > (termostato: alvo de entropia 1.5→0.75 nats, coeficiente em [0.003, 0.03], inicial 0.02).
 > Env vars: `FNAF_N_STEPS`, `FNAF_BATCH_SIZE`, `FNAF_N_EPOCHS`, `FNAF_TARGET_KL`,
 > `FNAF_CLIP_REWARD`, `FNAF_ENT_INICIO`, `FNAF_H_INICIO/H_FIM`, `FNAF_ENT_MIN/MAX/GANHO/PASSO_MAX`,
-> `FNAF_CURRICULO_LIMIAR`. Detalhes e porquês: [PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md).
+> `FNAF_CURRICULO_LIMIAR`, `FNAF_WARMUP_FRAC/WARMUP_CLIP` (warmup do crítico p/ treino fresco
+> com `--bc`: o BC clona só o ator; o crítico chega aleatório e aprende V com o ator quase
+> parado — clip_range 0.03 e ent_coef em ENT_MIN — nos primeiros ~8% do treino).
+> Detalhes e porquês: [PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md).
 > Onde uma seção abaixo citar um valor antigo no exemplo, o **valor atual prevalece**.
 
 ---

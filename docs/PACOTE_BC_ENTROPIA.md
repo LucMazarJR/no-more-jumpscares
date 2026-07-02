@@ -134,6 +134,14 @@ ele não vem sozinho:
 | Rotulagem com shift invertido: ação associada ao frame capturado DEPOIS do efeito dela | BC clonaria (consequência → ação) em vez de (observação → ação) | registro pendente: par `(frame_t, ação decidida vendo frame_t)` |
 | Sem rótulo de ameaça | portas fechando "do nada" no dataset → BC aprende portas aleatórias | `FNAFEnv` fantasma reusa `_atualizar_ameaca` + templates do treino |
 
+> **Atualização (pós-teste ao vivo da gravação):** os "4 consertos" acima evoluíram — o teste
+> real revelou mais divergências (delay de virada de lado antes do clique, luz = botão SEGURADO,
+> gesto de hover da câmera, cooldowns, verificação de clique por cor do botão). O gravador agora
+> usa o PRÓPRIO `FNAFEnv` como **executor e fonte de estado** (`_executar_acao` + fila de teclas
+> na main thread): a coreografia, os cooldowns e o estado são os MESMOS do treino por construção,
+> e a cópia paralela da mecânica (`EstadoJogo`) deixou de existir. A energia também passou a ser
+> re-ancorada pela foto, igual ao RL.
+
 **E o treino do BC ganhou defesas:** `WeightedRandomSampler` (1/freq da classe, capado em 10×
 a mediana — o oceano de "nada" não afoga as portas), split 90/10 ESTRATIFICADO por classe,
 recall por classe na validação, melhor checkpoint por macro-recall, early stop (paciência 15).
@@ -245,7 +253,11 @@ venv\Scripts\python main.py treino --novo --bc modelos\fnaf_bc.zip
 ```
 
 Confira no console: `[BC warmstart] transferidos N/N tensores` (**100%** — menos que isso,
-aborte e investigue) e `[hparams] n_steps=4096 ... clip_reward=100.0`.
+aborte e investigue) e `[hparams] n_steps=4096 ... clip_reward=100.0 ... warmup do crítico: 8%`
+(exige `FNAF_WARMUP_FRAC=0.08` no `.env` — já configurado). Nos primeiros ~40k steps o
+tensorboard deve mostrar `custom/warmup=1` e `custom/ent_coef=0.003`: é a janela em que o ator
+fica quase parado enquanto o crítico (que o BC NÃO treina) aprende V da política clonada —
+depois o termostato assume.
 
 ---
 
@@ -289,7 +301,12 @@ botões PRÓPRIOS, não alcançáveis pelo `Continue`. A mecânica de reset atua
 ## 6. Riscos aceitos e suas redes de segurança
 
 1. **RL erode o BC / BC vicia** → BC é só init (nada fixa os pesos); termostato injeta entropia
-   gradualmente (+20%/rollout máx).
+   gradualmente (+20%/rollout máx). O risco maior — o BC clona só o ATOR, o crítico chega
+   ALEATÓRIO ao PPO e as primeiras vantagens (ruído) poderiam destruir a política clonada — é
+   coberto pelo **warmup do crítico** (`FNAF_WARMUP_FRAC=0.08`): nos primeiros ~8% do treino o
+   `clip_range` fica em 0.03 (ator quase parado; o value_loss não passa pelo clip e treina
+   normal) e o ent_coef fica preso em `ENT_MIN` (o bônus de entropia também não passa pelo
+   clip). Auditável no tensorboard: `custom/warmup`.
 2. **Controlador oscilar** → medição suave (média do train inteiro), passo clampado, ganho 0.7;
    knob `FNAF_ENT_GANHO`.
 3. **Feedforward sem memória (Freddy)** → gatilho objetivo de reversão à LSTM (seção 2.7).

@@ -170,11 +170,12 @@ def treinar_bc(caminhos_json: list[str], epochs: int = 200, lr: float = 1e-3,
         features_extractor_class=MultimodalExtractor,
     )
 
+    # O learning_rate do PPO aqui é irrelevante: o treino de BC usa um Adam próprio (lr
+    # abaixo) — o PPO só fornece a arquitetura da política e o formato de checkpoint .zip.
     modelo = PPO(
         policy="MultiInputPolicy",
         env=env,
         policy_kwargs=policy_kwargs,
-        learning_rate=1e-4,
         verbose=0,
         device="auto",
     )

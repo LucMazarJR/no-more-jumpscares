@@ -736,28 +736,12 @@ class FNAFEnv(gym.Env):
             lx, ly = COORDS["luz_esquerda"]
             self.capture.segurar_botao(lx, ly)
             self._botao_luz_pressionado = (lx, ly)
-            _frame_l = self.capture.capturar_tela()
-            _px, _py = COORDS["porta_esquerda"]
-            _h, _w = _frame_l.shape[:2]
-            if 0 <= _py < _h and 0 <= _px < _w:
-                _gl, _rl = int(_frame_l[_py, _px][1]), int(_frame_l[_py, _px][2])
-                _real = True if _gl > _rl + 50 else (False if _rl > _gl + 50 else None)
-                if _real is not None and _real != self.porta_esq:
-                    self.porta_esq = _real
-                    self._count_sync_porta += 1
+            self._sync_porta_por_pixel("porta_esquerda")
         elif self.luz_dir:
             lx, ly = COORDS["luz_direita"]
             self.capture.segurar_botao(lx, ly)
             self._botao_luz_pressionado = (lx, ly)
-            _frame_l = self.capture.capturar_tela()
-            _px, _py = COORDS["porta_direita"]
-            _h, _w = _frame_l.shape[:2]
-            if 0 <= _py < _h and 0 <= _px < _w:
-                _gl, _rl = int(_frame_l[_py, _px][1]), int(_frame_l[_py, _px][2])
-                _real = True if _gl > _rl + 50 else (False if _rl > _gl + 50 else None)
-                if _real is not None and _real != self.porta_dir:
-                    self.porta_dir = _real
-                    self._count_sync_porta += 1
+            self._sync_porta_por_pixel("porta_direita")
 
         try:
             observacao = self._capturar_observacao()
@@ -850,6 +834,26 @@ class FNAFEnv(gym.Env):
             return "menu_crash"
         return "morte_energia" if self._apagou else "morte_animatronico"
 
+    def _sync_porta_por_pixel(self, nome_porta: str, frame=None) -> None:
+        """Sincroniza o estado interno da porta com a cor REAL do botão DOOR no HUD:
+        verde (G>R+50) = fechada, vermelho (R>G+50) = aberta, ambíguo = mantém.
+        Fonte ÚNICA da leitura por pixel — usada na pré-leitura de _executar_acao, no
+        sync passivo com a luz acesa em step() e pelo gravador de gameplay (BC)."""
+        x, y = COORDS[nome_porta]
+        if frame is None:
+            frame = self.capture.capturar_tela()
+        h, w = frame.shape[:2]
+        if not (0 <= y < h and 0 <= x < w):
+            return
+        g, r = int(frame[y, x][1]), int(frame[y, x][2])
+        real = True if g > r + 50 else (False if r > g + 50 else None)
+        if real is None:
+            return
+        atributo = "porta_esq" if nome_porta == "porta_esquerda" else "porta_dir"
+        if real != getattr(self, atributo):
+            setattr(self, atributo, real)
+            self._count_sync_porta += 1
+
     def _executar_acao(self, acao: int) -> bool:
         """Executa ação e retorna True se teve efeito, False se foi inválida."""
         nome_acao = ACOES[acao]
@@ -868,26 +872,7 @@ class FNAFEnv(gym.Env):
 
             if nome_acao in {"porta_esquerda", "porta_direita"}:
                 # Lê cor do botão antes do toggle para corrigir desync de estado.
-                x_pre, y_pre = COORDS[nome_acao]
-                frame_pre = self.capture.capturar_tela()
-                h_pre, w_pre = frame_pre.shape[:2]
-                if 0 <= y_pre < h_pre and 0 <= x_pre < w_pre:
-                    g_pre = int(frame_pre[y_pre, x_pre][1])
-                    r_pre = int(frame_pre[y_pre, x_pre][2])
-                    if g_pre > r_pre + 50:
-                        estado_real_pre = True   # verde → fechada
-                    elif r_pre > g_pre + 50:
-                        estado_real_pre = False  # vermelho → aberta
-                    else:
-                        estado_real_pre = None
-                    if estado_real_pre is not None:
-                        estado_atual_pre = self.porta_esq if nome_acao == "porta_esquerda" else self.porta_dir
-                        if estado_real_pre != estado_atual_pre:
-                            if nome_acao == "porta_esquerda":
-                                self.porta_esq = estado_real_pre
-                            else:
-                                self.porta_dir = estado_real_pre
-                            self._count_sync_porta += 1
+                self._sync_porta_por_pixel(nome_acao)
 
             if nome_acao == "porta_esquerda":
                 if self.cooldown_porta_esq > 0:

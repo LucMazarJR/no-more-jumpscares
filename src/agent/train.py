@@ -28,6 +28,16 @@ def linear(inicio: float, fim: float = 0.0):
     return lambda progresso_restante: fim + (inicio - fim) * progresso_restante
 
 
+def clip_com_warmup(frac: float):
+    """clip_range do PPO com warmup do crítico (BC→PPO): fica em WARMUP_CLIP nos primeiros
+    `frac` do treino (ator quase parado enquanto o crítico aprende V da política clonada) e
+    volta ao 0.2 padrão depois. O SB3 chama com o progresso RESTANTE (1.0 → 0.0) a cada
+    rollout — serve de relógio; retomadas continuam o progresso, então não re-dispara."""
+    return lambda progresso_restante: (
+        WARMUP_CLIP if (frac > 0 and progresso_restante > 1.0 - frac) else 0.2
+    )
+
+
 def _vecnormalize_do_checkpoint(carregar_modelo: str) -> str | None:
     """Deriva o vecnormalize salvo JUNTO de um checkpoint (save_vecnormalize=True). O
     CheckpointCallback nomeia:
@@ -114,6 +124,15 @@ ENT_MAX    = _env_float("FNAF_ENT_MAX",  0.03)     # teto: 0.03 FIXO já causou 
                                                    # transitório de controlador é seguro
 ENT_GANHO  = _env_float("FNAF_ENT_GANHO", 0.7)     # ganho do controlador (subamortecido; oscilou? 0.4)
 ENT_PASSO_MAX = _env_float("FNAF_ENT_PASSO_MAX", 0.20)  # passo máx por rollout (±20% em log-espaço)
+
+# Warmup do crítico (usar junto com --bc): o BC clona só o ATOR — o value_net não recebe
+# gradiente no BC e chega ALEATÓRIO no RL. Sem warmup, as primeiras vantagens (GAE) são ruído
+# e o PPO pode erodir a política clonada logo nos primeiros updates. Durante os primeiros
+# WARMUP_FRAC do treino: clip_range minúsculo (ator quase parado; o value_loss NÃO passa pelo
+# clip e treina normal) + ent_coef preso em ENT_MIN (o bônus de entropia também não passa pelo
+# clip — seria o único termo capaz de randomizar o BC). 0 = desligado.
+WARMUP_FRAC = _env_float("FNAF_WARMUP_FRAC", 0.0)
+WARMUP_CLIP = _env_float("FNAF_WARMUP_CLIP", 0.03)
 
 # Currículo automático: promove a noite-alvo quando a janela CHEIA da noite alvo cruza o limiar.
 CURRICULO_LIMIAR = _env_float("FNAF_CURRICULO_LIMIAR", 0.50)
@@ -311,8 +330,13 @@ class ControladorEntropia(BaseCallback):
         self.ent_min, self.ent_max = ent_min, ent_max
         self.ganho, self.passo_max = ganho, passo_max
 
+    def _em_warmup(self) -> bool:
+        # Janela de warmup do crítico (BC→PPO): ent_coef preso em ENT_MIN — o bônus de
+        # entropia não passa pelo clip_range e randomizaria a política clonada.
+        return WARMUP_FRAC > 0 and self.model._current_progress_remaining > 1.0 - WARMUP_FRAC
+
     def _on_training_start(self) -> None:
-        self.model.ent_coef = self.ent_inicial
+        self.model.ent_coef = self.ent_min if self._em_warmup() else self.ent_inicial
 
     def _on_step(self) -> bool:
         return True
@@ -321,13 +345,18 @@ class ControladorEntropia(BaseCallback):
         prog   = self.model._current_progress_remaining        # 1.0 → 0.0
         h_alvo = self.h_fim + (self.h_inicio - self.h_fim) * prog
         entropy_loss = self.model.logger.name_to_value.get("train/entropy_loss")
+        em_warmup = self._em_warmup()
         if entropy_loss is not None:                           # ausente só antes do 1º train()
             h = -float(entropy_loss)
-            erro  = self.ganho * (h_alvo - h)
-            fator = math.exp(min(max(erro, -self.passo_max), self.passo_max))
-            novo  = float(self.model.ent_coef) * fator
-            self.model.ent_coef = float(min(max(novo, self.ent_min), self.ent_max))
             self.logger.record("custom/entropia", h)           # H crua, direta (sem conta de cabeça)
+            if not em_warmup:                                  # warmup: controlador em espera
+                erro  = self.ganho * (h_alvo - h)
+                fator = math.exp(min(max(erro, -self.passo_max), self.passo_max))
+                novo  = float(self.model.ent_coef) * fator
+                self.model.ent_coef = float(min(max(novo, self.ent_min), self.ent_max))
+        if em_warmup:
+            self.model.ent_coef = self.ent_min
+        self.logger.record("custom/warmup", 1.0 if em_warmup else 0.0)
         self.logger.record("custom/h_alvo", h_alvo)
         self.logger.record("custom/ent_coef", float(self.model.ent_coef))
 
@@ -555,6 +584,7 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
             env=env,
             policy_kwargs=policy_kwargs,
             learning_rate=linear(3e-4, 3e-5),  # Decisão 6: decai 3e-4 → 3e-5 (piso p/ retomada)
+            clip_range=clip_com_warmup(WARMUP_FRAC),  # warmup do crítico (BC→PPO); 0.2 fora dele
             n_steps=N_STEPS,                   # bundle: rollout maior (~11 noites) → mais diversidade
             batch_size=BATCH_SIZE,             # bundle: escala com n_steps
             n_epochs=N_EPOCHS,                 # bundle: menos reuso do lote (default 4)
@@ -585,7 +615,13 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     modelo.target_kl = TARGET_KL
     print(f"[hparams] n_steps={modelo.n_steps} batch={modelo.batch_size} n_epochs={N_EPOCHS} "
           f"target_kl={TARGET_KL} clip_reward={CLIP_REWARD} | ent_coef inicial {ENT_INICIO} | "
-          f"controlador: H {H_INICIO}->{H_FIM} nats, ent [{ENT_MIN}, {ENT_MAX}], ganho {ENT_GANHO}")
+          f"controlador: H {H_INICIO}->{H_FIM} nats, ent [{ENT_MIN}, {ENT_MAX}], ganho {ENT_GANHO}"
+          + (f" | warmup do crítico: {WARMUP_FRAC*100:.0f}% do treino (clip {WARMUP_CLIP})"
+             if WARMUP_FRAC > 0 else ""))
+    if WARMUP_FRAC > 0 and not (bc_path and carregar_modelo is None):
+        print("[warmup] AVISO: FNAF_WARMUP_FRAC > 0 faz sentido em treino FRESCO com --bc "
+              "(ator clonado + crítico frio). Sem BC, só atrasa o início; em retomada, a janela "
+              "já passou (o progresso continua).")
 
     # log_callback ANTES do checkpoint na lista: assim, no step do save, o contador de episódio
     # já está atualizado quando CheckpointComLog imprime o contexto.
