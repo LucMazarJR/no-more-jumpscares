@@ -32,7 +32,7 @@ MAX_NOITE = 7  # FNAF1: noites 1-6 + custom (espelha src/environment/fnaf_env.py
 
 # Casa as linhas de episodio do LogCallback (train.py). Linhas OCORRIDO/cabecalho nao casam.
 LINHA = re.compile(
-    r"Ep\s+(\d+)\s+\|\s+Noite\s+(\d+)\s+\|\s+(VITORIA|MORTE|INTERROMPIDO)\s+\|"
+    r"Ep\s+(\d+)\s+\|\s+Noite\s+(\d+)\s+\|\s+(VITORIA|MORTE|INTERROMPIDO|TRUNCADO)\s+\|"
     r".*?Tempo:\s+([\d.]+)\s+min"
 )
 # "Causa:" so existe em logs pos-instrumentacao de desfecho (separa skill de sorte). Casa

@@ -239,14 +239,20 @@ class LogCallback(BaseCallback):
             if interrompido:
                 self.interrompidos += 1
                 resultado = "INTERROMPIDO"
+            elif info.get("vitoria", False):     # 6AM REAL — truncamento não é vitória
+                self.episodios_validos += 1
+                self.vitorias += 1
+                resultado = "VITORIA"
             elif info.get("morreu", False):
                 self.episodios_validos += 1
                 self.mortes += 1
                 resultado = "MORTE"
             else:
+                # Truncado (700s/max_passos) sem morte nem 6AM: o rótulo antigo virava
+                # VITORIA e inflava a taxa do log com episódios-fantasma presos no menu.
+                # Conta como válido SEM vitória — igual ao gate/MetricasPorNoite.
                 self.episodios_validos += 1
-                self.vitorias += 1
-                resultado = "VITORIA"
+                resultado = "TRUNCADO"
 
             taxa_vitoria = (
                 (self.vitorias / self.episodios_validos) * 100
@@ -545,6 +551,15 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     print("Iniciando ambiente FNAF1...")
     print("ATENÇÃO: Deixe o jogo aberto e na tela inicial!")
     print("Dica: segure F12 a qualquer momento para pausar.\n")
+    # Guarda anti-incidente: o .env é LOCAL por máquina (git-ignorado) — um `git pull` NÃO
+    # atualiza a fase. Uma run de 27h já foi queimada por FNAF_USAR_LSTM=1 esquecido.
+    if USAR_LSTM:
+        print("=" * 70)
+        print("AVISO: FNAF_USAR_LSTM=1 -> este treino usara RecurrentPPO (LSTM).")
+        print("A fase atual do projeto e FEEDFORWARD + BC warmstart (FNAF_USAR_LSTM=0);")
+        print("a LSTM so volta no A/B apos o gatilho de docs/PACOTE_BC_ENTROPIA.md secao 2.7.")
+        print("Confirme que e intencional — o .env desta maquina NAO vem com o git pull.")
+        print("=" * 70)
     time.sleep(3)
 
     env_base = DummyVecEnv([lambda: FNAFEnv()])
