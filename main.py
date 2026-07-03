@@ -77,13 +77,23 @@ def modo_bc():
     """Treina Behavioral Cloning a partir de datasets de gameplay humano gravados
     (src/utils/gravar_gameplay.py). Gera modelos/fnaf_bc.zip para warmstart do treino.
     NÃO precisa do jogo aberto (lê frames já gravados).
-    Uso: python main.py bc dados/.../dataset.json [outro.json ...]"""
+    Uso: python main.py bc [dataset.json ...]
+         Sem argumentos, pega automaticamente TODOS os dados/*/dataset.json."""
     from src.agent.behavioral_cloning import treinar_bc
 
     caminhos = [a for a in sys.argv[2:] if not a.startswith("--")]
     if not caminhos:
-        print("Uso: python main.py bc <dataset.json> [outro.json ...]")
-        print("Grave demos antes com: python -m src.utils.gravar_gameplay")
+        caminhos = sorted(glob.glob("dados/*/dataset.json"))
+        if caminhos:
+            print(f"Nenhum caminho informado — usando os {len(caminhos)} datasets encontrados em dados/:")
+            for caminho in caminhos:
+                print(f"  {caminho}")
+            print()
+
+    if not caminhos:
+        print("Uso: python main.py bc [dataset.json ...]")
+        print("Sem argumentos, pega automaticamente todos os dados/*/dataset.json.")
+        print("Grave demos antes com: python -m src.utils.gravar_gameplay --noite N")
         return
     treinar_bc(caminhos)
 
@@ -194,4 +204,4 @@ if __name__ == "__main__":
         print(f"Modo desconhecido: {modo}")
         print("Use: python main.py teste | python main.py treino [--novo] [--bc <zip>] | "
               "python main.py jogar [--ablacao imagem|estados] | "
-              "python main.py bc <dataset.json ...>")
+              "python main.py bc [dataset.json ...]  (sem args: pega dados/*/dataset.json)")

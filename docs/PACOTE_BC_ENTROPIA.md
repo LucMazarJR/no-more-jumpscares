@@ -235,7 +235,8 @@ venv\Scripts\python -m src.utils.gravar_gameplay --noite N
 ### Etapa C — BC (sem o jogo)
 
 ```
-venv\Scripts\python main.py bc dados\gameplay_*_noite1\dataset.json dados\gameplay_*_noite2\dataset.json ...
+venv\Scripts\python main.py bc
+# (sem argumentos: pega automaticamente todos os dados/*/dataset.json)
 ```
 
 Aceite: recall de portas ≥ 60%, câmera ≥ 50%, luzes ≥ 40%, top-1 ≥ 70% (validação).
