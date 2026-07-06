@@ -264,6 +264,13 @@ PESO_FOXY             = 0.5    # Φ: penaliza câmera negligenciada (proxy do Fo
 FOXY_PACIENCIA_S      = 14.0   # segundos REAIS sem câmera tolerados antes de o risco do Foxy subir no Φ
                                # (~20 steps × 0.7s; wall-clock igual a energia/tempo — steps variam de duração)
 FOXY_SATURACAO_S      = 28.0   # 2× a paciência — normaliza o 12º estado tempo_sem_camera (satura em 1.0)
+# Potencial da RESERVA DE ENERGIA (jul/2026, pós-1ª run do pacote): a run de 160k mostrou o
+# agente APRENDENDO a defesa (morte_animatronico 92%→~15%) e passando a morrer de APAGÃO
+# sistemático (~80% das mortes, acampado nas portas até ~420s). O único preço da energia era o
+# terminal, 400s depois da decisão. Φ += PESO_ENERGIA·(energia/100) telescopa (γΦ'−Φ) e faz o
+# gasto custar NA HORA sem mover o ótimo. k=4 calibrado p/ "abrir porta com ameaça VELHA
+# compensa": queda de Φ_ameaça ao abrir (0.5) < economia k·ΔE no resto da noite (k·~0.15-0.25).
+PESO_ENERGIA          = _env_float_opcional("FNAF_PESO_ENERGIA", 4.0)
 
 
 class FNAFEnv(gym.Env):
@@ -1038,6 +1045,16 @@ class FNAFEnv(gym.Env):
         excesso_sem_camera = max(0.0, self._tempo_sem_camera() - FOXY_PACIENCIA_S)
         risco_foxy = min(excesso_sem_camera / FOXY_PACIENCIA_S, 1.0)
         phi -= PESO_FOXY * risco_foxy
+        # Reserva de energia (jul/2026): situação com bateria é mais segura que sem. Faz o
+        # gasto custar imediatamente via γΦ'−Φ (≈ −k·ΔE por step) em vez de só no apagão —
+        # observável (energia é o estado[6]), telescopa, não move o ótimo. Também desarma a
+        # armadilha do acampamento: a limpeza da ameaça FUNCIONA de porta fechada (a
+        # SOMBRA_REGIAO segue visível e a calibração foi feita assim: vazio 11.65 vs Bonnie
+        # 9.24), mas EXIGE a luz esquerda acesa — acampar de luz apagada nunca limpa a flag,
+        # e o termo de bloqueio validava ficar fechado p/ sempre; agora o relógio de energia
+        # cobra o aluguel de cada segundo fechado, tornando rentável a rotina barata
+        # "fechar → luz → confirmar vazio → reabrir" (sem precisar abrir p/ conferir).
+        phi += PESO_ENERGIA * (self.energia / 100.0)
         return phi
 
     def _calcular_recompensa(self, morreu: bool, sobreviveu: bool, acao: int, acao_valida: bool) -> float:

@@ -14,7 +14,7 @@ import time
 
 from src.environment.fnaf_env import (
     FNAFEnv, ACOES, CHECKPOINTS_NOITE, GAMMA,
-    RECOMPENSA_NOITE, BONUS_MARCO_HORA, FOXY_PACIENCIA_S,
+    RECOMPENSA_NOITE, BONUS_MARCO_HORA, FOXY_PACIENCIA_S, PESO_ENERGIA,
 )
 
 NOME_PARA_ACAO = {nome: i for i, nome in ACOES.items()}
@@ -142,11 +142,12 @@ def bonus_hora_maximo() -> float:
 
 
 def _phi(*, ameaca_esq=False, porta_esq=False, ameaca_dir=False, porta_dir=False,
-         tempo_sem_camera=0.0) -> float:
+         tempo_sem_camera=0.0, energia=100.0) -> float:
     env = _novo_env()
     env.ameaca_esq, env.porta_esq = ameaca_esq, porta_esq
     env.ameaca_dir, env.porta_dir = ameaca_dir, porta_dir
     env._t_ultima_camera = time.perf_counter() - tempo_sem_camera
+    env.energia = energia
     return env._potencial_seguranca()
 
 
@@ -203,9 +204,31 @@ def test_phi_bloqueio_supera_exposto():
     assert bloqueado > exposto
 
 
-def test_phi_sem_ameaca_eh_zero():
-    # Sem ameaca e com camera fresca, fechar porta nao da seguranca (Phi=0).
-    assert _phi(ameaca_esq=False, porta_esq=True, ameaca_dir=False, porta_dir=True) == 0.0
+def test_phi_sem_ameaca_so_reserva_de_energia():
+    # Sem ameaca e com camera fresca, fechar porta nao da seguranca: Phi e SO a reserva
+    # de energia (e com bateria zerada e nada mais em jogo, Phi = 0).
+    assert _phi(ameaca_esq=False, porta_esq=True, ameaca_dir=False, porta_dir=True,
+                energia=70.0) == _phi(energia=70.0)
+    assert abs(_phi(energia=0.0)) < 1e-9
+
+
+def test_phi_energia_monotonica():
+    # Mais bateria = situacao mais segura (base do preco imediato do gasto).
+    assert _phi(energia=80.0) > _phi(energia=20.0)
+    assert abs((_phi(energia=100.0) - _phi(energia=0.0)) - PESO_ENERGIA) < 1e-9
+
+
+def test_shaping_gastar_energia_custa_no_step():
+    # O invariante certo do PBRS de energia: no SOMATORIO DESCONTADO ele telescopa para
+    # -Phi(s0) (nao muda o otimo), mas o sinal POR STEP fica imediato — o step que drena
+    # mais energia recebe shaping (gamma*Phi' - Phi) menor que o step frugal equivalente.
+    e0 = 70.0
+    dreno_base  = 0.104 * PASSO_DT              # so o passivo
+    dreno_gasto = (0.104 + 2 * 0.100) * PASSO_DT  # 2 itens ligados
+    phi0 = _phi(energia=e0)
+    shap_frugal = GAMMA * _phi(energia=e0 - dreno_base) - phi0
+    shap_gasto  = GAMMA * _phi(energia=e0 - dreno_gasto) - phi0
+    assert shap_gasto < shap_frugal
 
 
 def test_phi_foxy_reduz_seguranca():
@@ -257,7 +280,9 @@ ANTI_VICIO = [
 
 SHAPING = [
     test_phi_bloqueio_supera_exposto,
-    test_phi_sem_ameaca_eh_zero,
+    test_phi_sem_ameaca_so_reserva_de_energia,
+    test_phi_energia_monotonica,
+    test_shaping_gastar_energia_custa_no_step,
     test_phi_foxy_reduz_seguranca,
     test_phi_foxy_tolera_ate_paciencia,
     test_shaping_telescopa,

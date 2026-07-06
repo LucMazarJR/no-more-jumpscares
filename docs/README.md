@@ -25,6 +25,7 @@ guardados em [historico/](historico/)). Última reorganização: julho/2026
 | [MONITORAMENTO_TREINO.md](MONITORAMENTO_TREINO.md) | 🟢 vivo (jul/2026) | Métricas por noite, causas de desfecho (skill vs sorte), currículo e rollback de checkpoints |
 | [GUIA_TENSORBOARD.md](GUIA_TENSORBOARD.md) | 🟢 vivo (jun/2026) | Como ler os gráficos do tensorboard (smoothing, eixos, cada métrica) |
 | [REORGANIZACAO_2026_07.md](REORGANIZACAO_2026_07.md) | 🟢 vivo (jul/2026) | O que mudou na estrutura do repositório e nos logs em julho/2026 |
+| [AVALIACAO_TREINO_PC_CEGO.md](AVALIACAO_TREINO_PC_CEGO.md) | 🟢 vivo (jul/2026) | Análise do build "cego" do PC 2 (sem percepção): teto observacional, baseline p/ comparação cego vs observador |
 | [historico/AUDITORIA_RECOMPENSA_E_RL.md](historico/AUDITORIA_RECOMPENSA_E_RL.md) | 📦 histórico (jun/2026) | As Decisões 1–7 da auditoria de recompensa/RL — a origem do redesenho atual |
 | [historico/ALTERACOES_COMPLETAS.md](historico/ALTERACOES_COMPLETAS.md) | 📦 histórico (jun/2026) | Registro técnico das correções de bugs do pipeline (dupla normalização, captura, energia...) |
 | [historico/MELHORIAS_PROJETO_ATUAL.md](historico/MELHORIAS_PROJETO_ATUAL.md) | 📦 histórico (mai/2026) | Ideias de melhoria da época — curriculum e BC já viraram realidade |

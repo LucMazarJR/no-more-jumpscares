@@ -10,7 +10,7 @@ from stable_baselines3 import PPO
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from src.environment.fnaf_env import FNAFEnv, GAMMA, MAX_NOITE, RESET_METODO
+from src.environment.fnaf_env import FNAFEnv, GAMMA, MAX_NOITE, RESET_METODO, PESO_ENERGIA
 from src.agent.multimodal_policy import MultimodalExtractor
 
 PASTA_MODELOS = "modelos"
@@ -629,7 +629,8 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     modelo.n_epochs  = N_EPOCHS
     modelo.target_kl = TARGET_KL
     print(f"[hparams] n_steps={modelo.n_steps} batch={modelo.batch_size} n_epochs={N_EPOCHS} "
-          f"target_kl={TARGET_KL} clip_reward={CLIP_REWARD} | ent_coef inicial {ENT_INICIO} | "
+          f"target_kl={TARGET_KL} clip_reward={CLIP_REWARD} peso_energia={PESO_ENERGIA} | "
+          f"ent_coef inicial {ENT_INICIO} | "
           f"controlador: H {H_INICIO}->{H_FIM} nats, ent [{ENT_MIN}, {ENT_MAX}], ganho {ENT_GANHO}"
           + (f" | warmup do crítico: {WARMUP_FRAC*100:.0f}% do treino (clip {WARMUP_CLIP})"
              if WARMUP_FRAC > 0 else ""))

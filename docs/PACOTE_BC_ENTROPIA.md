@@ -103,6 +103,20 @@ observação antiga.
 **Efeito colateral desejado:** o espaço de estados agora é quase-Markov (ameaças são HELD, o
 Foxy é observável) → o PPO feedforward volta a ser suficiente (ver 2.7).
 
+> **Atualização (pós-1ª run do pacote, 05/07/2026):** o Φ ganhou um TERCEIRO termo —
+> `PESO_ENERGIA·(energia/100)` (knob `FNAF_PESO_ENERGIA`, default 4.0). A run de 160k mostrou o
+> agente dominando a defesa (`morte_animatronico` 92%→~15%) e passando a morrer de APAGÃO
+> sistemático (~80%), acampado nas portas até ~420s. A limpeza da ameaça FUNCIONA de porta
+> fechada (a SOMBRA_REGIAO segue visível; a calibração de `LIMIAR_VAZIO` foi feita assim —
+> vazio 11.65 vs Bonnie 9.24), mas exige a LUZ ESQUERDA ACESA: acampando de luz apagada a flag
+> HELD nunca limpa, o termo de bloqueio validava ficar fechado — e o único preço da energia era
+> o terminal, 400s depois. Ou seja, a rotina segura "fechar → luz → confirmar vazio → reabrir"
+> sempre existiu (não precisa abrir p/ conferir); faltava o gradiente pagar por ela. O potencial de energia telescopa como os
+> demais (mesma GAMMA, não move o ótimo) e faz cada % gasto custar NA HORA. De quebra, a run
+> validou o 12º estado: nosso crítico fechou com explained_variance ~0,99, enquanto o build
+> "cego" do PC 2 (sem percepção — ver AVALIACAO_TREINO_PC_CEGO.md) degrada o crítico após 100k
+> por observabilidade parcial.
+
 ### 2.4 BC warmstart — a maior alavanca (`gravar_gameplay.py`, `behavioral_cloning.py`)
 
 **Problema:** cada step custa ~0.7s de relógio (jogo real, sem aceleração). Descobrir o básico
@@ -357,7 +371,9 @@ warmstart importa mais que "mais entropia".
 premiar ações ("fechou porta: +1", que vicia), define-se um potencial Φ("quão segura é a situação")
 e premia-se só a VARIAÇÃO γ·Φ(depois)−Φ(antes). Somada no episódio inteiro, essa série se cancela
 quase toda ("telescopa", como (b−a)+(c−b) = c−a) — então a dica acelera o aprendizado **sem mudar
-qual é a melhor estratégia**.
+qual é a melhor estratégia**. O Φ do projeto tem três termos, todos observáveis: ameaça bloqueada
+(+0.5/lado), risco do Foxy (−0.5 conforme negligencia a câmera) e reserva de energia
+(+PESO_ENERGIA·E/100 — faz o gasto custar na hora, não só no apagão).
 
 **Behavioral Cloning (BC) / warmstart** — BC = aprendizado por imitação: a rede aprende a prever "que
 ação o humano tomou vendo esta tela" (aprendizado supervisionado, sem recompensa). **Warmstart** =
