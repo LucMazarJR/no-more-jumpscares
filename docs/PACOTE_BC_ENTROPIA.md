@@ -54,12 +54,12 @@ na observação** (tempo sem checar câmera), e o currículo era manual (`.env` 
 (H, em nats) e ajusta o ent_coef para ela rastrear um ALVO que decai devagar ao longo do treino:
 
 ```
-H_alvo: 1.5 nats (início) → 0.75 nats (fim)
-        e^1.5 ≈ 4.5 ações efetivas       e^0.75 ≈ 2.1 ações efetivas
+H_alvo: 1.1 nats (início) → 0.7 nats (fim)
+        e^1.1 ≈ 3.0 ações efetivas       e^0.7 ≈ 2.0 ações efetivas
         (uniforme sobre 17 ações seria ln(17) ≈ 2.83 nats)
 
 ajuste por rollout:  ent_coef *= exp(clamp(0.7 · (H_alvo − H), ±0.20))
-limites:             ent_coef ∈ [0.003, 0.03]
+limites:             ent_coef ∈ [0.003, 0.012]
 ```
 
 - Política colapsando (H < alvo) → coeficiente sobe sozinho (até +20%/rollout — dobra em ~4
@@ -68,12 +68,22 @@ limites:             ent_coef ∈ [0.003, 0.03]
 - **Medição:** `train/entropy_loss` do SB3 (= −média(H), igual no PPO e no RecurrentPPO), lida
   em `_on_rollout_end` — carrega o train() do rollout anterior (defasagem de 1 rollout,
   irrelevante: o colapso se desenrola por dezenas de rollouts).
-- **Teto 0.03 de propósito:** 0.03 FIXO já causou morte por apagão; como teto transitório de um
-  controlador só é atingido sob pressão de colapso.
+- **Teto 0.012 (era 0.03):** ver a atualização da run 2 abaixo.
 
-**Knobs (.env):** `FNAF_H_INICIO`, `FNAF_H_FIM`, `FNAF_ENT_MIN/MAX`, `FNAF_ENT_GANHO` (oscilou?
-0.4), `FNAF_ENT_PASSO_MAX`. **Tensorboard:** `custom/entropia` (H crua), `custom/h_alvo`,
-`custom/ent_coef`.
+> **Atualização (run 2, 08/07/2026) — regra do warmstart:** os valores originais (alvo
+> 1.5→0.75, teto 0.03) foram calibrados p/ política ALEATÓRIA de treino do zero. Com `--bc` o
+> clone nasce afiado (H≈1.1): o controlador passou ~80k steps empurrando o ent_coef
+> 0.003→0.020 pra forçar H de volta a 1.4+ — e derreteu exatamente a precisão que o BC
+> comprou. Assinatura nos dados: morte por animatrônico ~70% na N2 com **42% de bateria
+> sobrando** (mediana) = defesa ruidosa, não economia ruim; janela N1 deslizou 60%→53%.
+> Regra: **o alvo inicial deve casar com a entropia que o BC entrega, nunca forçá-la p/
+> cima** (o termostato existe p/ impedir COLAPSO, não p/ manter aleatoriedade artificial).
+> Defaults novos no código: `H_INICIO=1.1`, `H_FIM=0.7`, `ENT_MAX=0.012`. Treino do zero sem
+> `--bc` é o único caso p/ voltar aos antigos (via env var).
+
+**Knobs (env var, só override excepcional):** `FNAF_H_INICIO`, `FNAF_H_FIM`, `FNAF_ENT_MIN/MAX`,
+`FNAF_ENT_GANHO` (oscilou? 0.4), `FNAF_ENT_PASSO_MAX`. **Tensorboard:** `custom/entropia`
+(H crua), `custom/h_alvo`, `custom/ent_coef`.
 
 ### 2.2 `clip_reward=100` no VecNormalize (`src/agent/train.py`)
 
@@ -111,7 +121,12 @@ Foxy é observável) → o PPO feedforward volta a ser suficiente (ver 2.7).
 > vazio 11.65 vs Bonnie 9.24), mas exige a LUZ ESQUERDA ACESA: acampando de luz apagada a flag
 > HELD nunca limpa, o termo de bloqueio validava ficar fechado — e o único preço da energia era
 > o terminal, 400s depois. Ou seja, a rotina segura "fechar → luz → confirmar vazio → reabrir"
-> sempre existiu (não precisa abrir p/ conferir); faltava o gradiente pagar por ela. O potencial de energia telescopa como os
+> sempre existiu (não precisa abrir p/ conferir); faltava o gradiente pagar por ela.
+> **Confirmado na run 2 (08/07/2026):** morte_energia na N2 caiu de 74-88% p/ ~30%, o
+> acampamento sumiu e as mortes por energia restantes duram 8,0 min (noite = 8,9) — o gargalo
+> migrou p/ defesa (ver atualização do §2.1: entropia forçada). Telemetria nova p/ o próximo
+> diagnóstico: `custom/noite_N/morte_anim_com_flag` separa morrer CEGO (flag apagada → falta
+> disciplina de luz) de morrer VENDO (flag acesa → política/entropia). O potencial de energia telescopa como os
 > demais (mesma GAMMA, não move o ótimo) e faz cada % gasto custar NA HORA. De quebra, a run
 > validou o 12º estado: nosso crítico fechou com explained_variance ~0,99, enquanto o build
 > "cego" do PC 2 (sem percepção — ver AVALIACAO_TREINO_PC_CEGO.md) degrada o crítico após 100k
@@ -205,6 +220,15 @@ O 12º estado (2.3) + ameaças HELD removeram o motivo original da LSTM (Foxy).
 não dá para ver sem memória, ex.: Freddy), teste `FNAF_USAR_LSTM=1` — o extractor do BC ainda
 transfere.
 
+**Alternativa mais barata que a LSTM se o problema for ESPECIFICAMENTE o Foxy** (jul/2026):
+hoje o risco Foxy é só relógio (Φ paciência 14s fixa + 12º estado) — malha aberta em relação
+ao Foxy REAL, que é estocástico e acelera por noite. Se nas noites 3+ a assinatura for
+`morte_animatronico` com porta esquerda ABERTA e apagões baixos (relógio mal calibrado), a
+opção feedforward-compatível é um 13º estado "último estágio do Foxy visto na CAM 1C"
+(template dos 4 estágios do Pirate Cove) + staleness: o valor só atualiza se o agente ABRIR a
+câmera certa — vira fonte de informação genuína, não ritual. Custa mudança de shape (12→13+)
+⇒ treino do zero; empacotar com o próximo restart, nunca no meio de uma run.
+
 ### 2.8 `n_steps` 8192 → 4096 (`FNAF_N_STEPS`)
 
 8192 protegia bem uma política inicial RUIM (~11 noites de diversidade por lote), mas custava
@@ -296,10 +320,11 @@ depois o termostato assume.
 
 - **BC com recall de portas ~0** mesmo com sampler → grave +3 sessões focadas em situações de
   porta antes de seguir.
-- **RL@20k: H < 0.3 com ent_coef saturado no teto** → `FNAF_ENT_MAX=0.04` e/ou `FNAF_H_INICIO=1.6`.
+- **RL@20k: H < 0.3 com ent_coef saturado no teto** → `FNAF_ENT_MAX=0.03` e/ou `FNAF_H_INICIO`+0.2.
 - **RL@50k: Noite 1 < 40%** → diagnostique por `custom/causas`: `morte_energia` dominante →
-  `FNAF_H_INICIO=1.2` (menos aleatoriedade); `morte_animatronico` dominante → BC fraco em
-  portas (volte à Etapa B/C).
+  `FNAF_H_INICIO=0.9` (menos aleatoriedade); `morte_animatronico` dominante → cruze com
+  `custom/noite_N/morte_anim_com_flag`: flag APAGADA → BC fraco em luz/portas (volte à Etapa
+  B/C); flag ACESA → entropia alta demais (cheque se H está acima do alvo).
 - **`value_loss` explodindo** → `FNAF_CLIP_REWARD=50` + reiniciar fresco (decidir até ~30k).
 - **`custom/ent_coef` serrilhado (período 2)** → `FNAF_ENT_GANHO=0.4`.
 

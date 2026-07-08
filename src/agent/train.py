@@ -109,19 +109,25 @@ def _env_float(nome: str, padrao: float) -> float:
 #                       chegava até 1:1 no gradiente. 100 deixa os terminais passarem inteiros.
 #                       (Contingência se train/value_loss explodir: FNAF_CLIP_REWARD=50.)
 #   H alvo (nats)     : o ControladorEntropia rastreia um ALVO de entropia que decai devagar
-#                       (1.5 → 0.75 ≈ 4.5 → 2.1 ações efetivas; uniforme seria ln17 ≈ 2.83),
+#                       (1.1 → 0.7 ≈ 3.0 → 2.0 ações efetivas; uniforme seria ln17 ≈ 2.83),
 #                       ajustando o ent_coef em malha fechada — ver docstring da classe.
+#                       Calibrado p/ WARMSTART (jul/2026, run 2): o BC entrega H≈1.1; o alvo
+#                       antigo (1.5, de treino do zero) fez o controlador passar 80k steps
+#                       empurrando ent_coef 0.003→0.020 e derreteu o clone até H 1.44 — morte
+#                       por animatrônico com 42% de bateria sobrando (defesa ruidosa). Alvo
+#                       inicial deve casar com a entropia que o BC entrega, nunca forçá-la p/
+#                       cima; o teto ENT_MAX menor limita o estrago se o alvo estiver errado.
 N_STEPS    = max(64, _env_int("FNAF_N_STEPS",   4096))
 BATCH_SIZE = max(8,  _env_int("FNAF_BATCH_SIZE", 256))
 N_EPOCHS   = max(1,  _env_int("FNAF_N_EPOCHS",     4))
 TARGET_KL  = _env_float("FNAF_TARGET_KL",  0.03)
 CLIP_REWARD = _env_float("FNAF_CLIP_REWARD", 100.0)
 ENT_INICIO = _env_float("FNAF_ENT_INICIO", 0.02)   # valor INICIAL do ent_coef (o controlador assume dali)
-H_INICIO   = _env_float("FNAF_H_INICIO", 1.5)      # alvo de entropia (nats) no começo do treino
-H_FIM      = _env_float("FNAF_H_FIM",    0.75)     # alvo no fim (nunca 0 — congela em política subótima)
+H_INICIO   = _env_float("FNAF_H_INICIO", 1.1)      # alvo inicial ≈ H do clone BC (era 1.5, de treino do zero)
+H_FIM      = _env_float("FNAF_H_FIM",    0.7)      # alvo no fim (nunca 0 — congela em política subótima)
 ENT_MIN    = _env_float("FNAF_ENT_MIN",  0.003)    # piso do ent_coef
-ENT_MAX    = _env_float("FNAF_ENT_MAX",  0.03)     # teto: 0.03 FIXO já causou apagão; como teto
-                                                   # transitório de controlador é seguro
+ENT_MAX    = _env_float("FNAF_ENT_MAX",  0.012)    # teto: 0.03 deixou o controlador derreter o clone BC
+                                                   # (run 2); 0.012 ainda dá 4x de faixa sobre o piso
 ENT_GANHO  = _env_float("FNAF_ENT_GANHO", 0.7)     # ganho do controlador (subamortecido; oscilou? 0.4)
 ENT_PASSO_MAX = _env_float("FNAF_ENT_PASSO_MAX", 0.20)  # passo máx por rollout (±20% em log-espaço)
 
@@ -389,6 +395,10 @@ class MetricasPorNoite(BaseCallback):
         self.janela, self.resumo_a_cada, self.dominio = janela, resumo_a_cada, dominio
         self.win  = defaultdict(lambda: deque(maxlen=janela))   # noite -> deque(0/1)
         self.surv = defaultdict(lambda: deque(maxlen=janela))   # noite -> deque(tempo_jogo s)
+        # Das mortes por animatrônico, em quantas ALGUMA flag de ameaça estava acesa no step
+        # final? Separa "morreu CEGO" (flag apagada → falta disciplina de luz) de "morreu VENDO"
+        # (flag acesa e não fechou → política/entropia) — decide onde atacar em seguida.
+        self.morte_anim_flag = defaultdict(lambda: deque(maxlen=janela))  # noite -> deque(0/1)
         self.win_geral = deque(maxlen=50)   # todas as noites — era do EntropiaSchedule (dashboards)
         self.causas    = deque(maxlen=50)   # rótulo de desfecho por episódio (skill vs sorte)
         self.n_eps = 0
@@ -404,6 +414,9 @@ class MetricasPorNoite(BaseCallback):
             self.win_geral.append(1 if info.get("vitoria", False) else 0)
             if info.get("causa"):
                 self.causas.append(info["causa"])
+                if info["causa"] == "morte_animatronico":
+                    viu = info.get("ameaca_esq", False) or info.get("ameaca_dir", False)
+                    self.morte_anim_flag[noite].append(1 if viu else 0)
             self.n_eps += 1
             if self.n_eps % self.resumo_a_cada == 0:
                 self._imprimir_resumo()
@@ -421,6 +434,9 @@ class MetricasPorNoite(BaseCallback):
         for noite, d in self.surv.items():
             if d:
                 self.logger.record(f"custom/noite_{noite}/sobrevivencia_s", sum(d) / len(d))
+        for noite, d in self.morte_anim_flag.items():
+            if d:   # fração das mortes por animatrônico em que morreu VENDO (flag acesa)
+                self.logger.record(f"custom/noite_{noite}/morte_anim_com_flag", sum(d) / len(d))
         # Sinal de currículo: 1 = Noite 1 dominada (hora de considerar o continue).
         self.logger.record("custom/curriculo/noite1_dominada", 1.0 if self._noite1_dominada() else 0.0)
         # win_rate_50: mesma janela do antigo gate (rolling-50, não a cumulativa do treino.log).

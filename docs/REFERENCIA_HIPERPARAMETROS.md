@@ -11,7 +11,8 @@ o que os logs estão mostrando e prever o efeito de qualquer ajuste.
 > **Valores atuais (fonte: código — pacote BC+entropia de julho/2026):** `gamma=0.997`,
 > `n_steps=4096`, `batch_size=256`, `n_epochs=4`, `target_kl=0.03`, `clip_reward=100`,
 > `learning_rate` linear 3e-4→3e-5, e `ent_coef` **adaptativo** via `ControladorEntropia`
-> (termostato: alvo de entropia 1.5→0.75 nats, coeficiente em [0.003, 0.03], inicial 0.02).
+> (termostato: alvo de entropia 1.1→0.7 nats — calibrado p/ warmstart BC, run 2 jul/2026 —,
+> coeficiente em [0.003, 0.012], inicial 0.02).
 > Env vars: `FNAF_N_STEPS`, `FNAF_BATCH_SIZE`, `FNAF_N_EPOCHS`, `FNAF_TARGET_KL`,
 > `FNAF_CLIP_REWARD`, `FNAF_ENT_INICIO`, `FNAF_H_INICIO/H_FIM`, `FNAF_ENT_MIN/MAX/GANHO/PASSO_MAX`,
 > `FNAF_CURRICULO_LIMIAR`, `FNAF_PESO_ENERGIA` (potencial da reserva de energia no Φ, default
@@ -28,8 +29,8 @@ o que os logs estão mostrando e prever o efeito de qualquer ajuste.
 
 **Valor atual:** ADAPTATIVO. O `ControladorEntropia` (termostato) mede a entropia H real da
 política a cada rollout e ajusta o `ent_coef` para ela seguir um alvo que decai devagar
-(1.5 → 0.75 nats ao longo do treino), com coeficiente limitado a `[0.003, 0.03]` e valor inicial
-`0.02`. Substituiu o antigo `EntropiaSchedule` (gate por win_rate): não existia valor FIXO certo —
+(1.1 → 0.7 nats ao longo do treino — ver "regra do warmstart" abaixo), com coeficiente limitado
+a `[0.003, 0.012]` e valor inicial `0.02`. Substituiu o antigo `EntropiaSchedule` (gate por win_rate): não existia valor FIXO certo —
 0.03 deixava a política aleatória demais p/ conservar energia e 0.02 colapsava; e o gate nunca
 abria quando o agente estagnava abaixo dele. (Os exemplos abaixo citam valores fixos antigos; a
 explicação do conceito segue válida.)
@@ -76,14 +77,21 @@ ou descansar para conservar energia.
 
 ### Como ajustar (no controlador, mexa no ALVO, não no coeficiente)
 
-Com o termostato, o `ent_coef` se ajusta sozinho — os botões são os **alvos e limites**:
+Com o termostato, o `ent_coef` se ajusta sozinho — os botões são os **alvos e limites**.
+
+**Regra do warmstart (jul/2026, run 2):** com `--bc`, o alvo inicial deve CASAR com a entropia
+que o clone entrega (H≈1.1), nunca forçá-la p/ cima — o alvo antigo (1.5, pensado p/ política
+aleatória de treino do zero) fez o controlador passar 80k steps inflando o `ent_coef`
+(0.003→0.020) e derreteu o clone até H 1.44 (morte por animatrônico com 42% de bateria
+sobrando = defesa ruidosa). Defaults atuais: `H_INICIO=1.1`, `H_FIM=0.7`, `ENT_MAX=0.012`.
+Treino do zero SEM `--bc` é o único caso p/ subir de volta (H_INICIO~1.5, ENT_MAX~0.03).
 
 **Política aleatória demais** (morre por apagão, `morte_energia` dominante em `custom/causas`):
-- baixar `FNAF_H_INICIO` (ex.: 1.5 → 1.2) — menos "ações efetivas" no começo.
+- baixar `FNAF_H_INICIO` (ex.: 1.1 → 0.9) — menos "ações efetivas" no começo.
 
 **Política colapsando mesmo com o controlador** (`custom/entropia` < 0.3 com `custom/ent_coef`
 saturado no teto por >10 rollouts):
-- subir `FNAF_ENT_MAX` (0.03 → 0.04) e/ou `FNAF_H_INICIO` (1.5 → 1.6).
+- subir `FNAF_ENT_MAX` (0.012 → 0.03) e/ou `FNAF_H_INICIO` (+0.2).
 
 **`custom/ent_coef` serrilhando (oscilação com período 2):**
 - reduzir `FNAF_ENT_GANHO` (0.7 → 0.4).
@@ -349,21 +357,21 @@ entropia pelo `ControladorEntropia` (termostato — ver seção `ent_coef` acima
   Em `fnaf_env.GAMMA` (fonte única: PPO + VecNormalize + shaping Φ). **Só em treino fresco.**
 - `learning_rate`: **`linear(3e-4, 3e-5)`** — decai ao longo do treino; **piso 3e-5**
   (não 0) para não congelar a retomada (o `progress_remaining` reinicia a cada `learn()`).
-- `ent_coef`: **adaptativo** via `ControladorEntropia` (alvo H 1.5→0.75 nats, coef em
-  [0.003, 0.03], inicial 0.02).
+- `ent_coef`: **adaptativo** via `ControladorEntropia` (alvo H 1.1→0.7 nats — calibrado p/
+  warmstart BC desde jul/2026, run 2 —, coef em [0.003, 0.012], inicial 0.02).
 
 **Mapa sintoma → botão culpado** (reusa os sintomas das seções acima):
 
 | sintoma nos logs (tensorboard / `logs/analise/`) | suspeito | o que fazer |
 |---|---|---|
 | crítico instável, loss diverge, vitória **aparece e some** bruscamente | gamma alto **ou** LR alto cedo **ou** clip_reward alto | gamma 0.995 / LR fixo 3e-4 / `FNAF_CLIP_REWARD=50` |
-| caótico, nunca converge, ação ~aleatória mesmo após muito treino | alvo de H alto demais | `FNAF_H_INICIO=1.2` |
-| **congela cedo**, repete a mesma ação, exploração some | teto do ent_coef baixo p/ a pressão de colapso **ou** LR caiu rápido | `FNAF_ENT_MAX=0.04` + `FNAF_H_INICIO=1.6` / subir piso do LR |
+| caótico, nunca converge, ação ~aleatória mesmo após muito treino; **morte com energia sobrando** | alvo de H alto demais (derretendo o clone BC) | baixar `FNAF_H_INICIO` (default já é 1.1 p/ warmstart) |
+| **congela cedo**, repete a mesma ação, exploração some | teto do ent_coef baixo p/ a pressão de colapso **ou** LR caiu rápido | `FNAF_ENT_MAX=0.03` + `FNAF_H_INICIO`+0.2 / subir piso do LR |
 | aprende lento, não "esquece" comportamento ruim | piso de LR baixo demais | subir o piso (ex.: 1e-4) |
 
 **Lembretes:**
 - gamma ≥ 0.999 → horizonte > episódio → crítico instável; 0.997 está na faixa segura (0.993–0.997).
-- O termostato NUNCA leva a entropia a zero (`FNAF_H_FIM=0.75` e piso `FNAF_ENT_MIN=0.003`) —
+- O termostato NUNCA leva a entropia a zero (`FNAF_H_FIM=0.7` e piso `FNAF_ENT_MIN=0.003`) —
   consolida sem congelar. Isso é proposital.
 - **Medir sempre por taxa de vitória / tempo de sobrevivência**, nunca pela recompensa (muda entre
   versões). Salvar o controle (`modelos/*.zip` + `vecnormalize.pkl`) **antes** de treinar.
