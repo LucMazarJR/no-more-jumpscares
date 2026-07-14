@@ -7,7 +7,7 @@ de mouse/teclado. O objetivo é treinar uma IA para sobreviver
 
 **Visão Geral**
 
-- **Entrada:** screenshots do jogo (captura de janela, 84×84) + vetor de 12 estados internos
+- **Entrada:** screenshots do jogo (captura de janela, 84×84) + vetor de 14 estados internos
 - **Ações:** cliques nas posições mapeadas (portas, luzes, câmeras) — 17 ações discretas
 - **Algoritmo:** PPO via `stable_baselines3`, com warmstart por Behavioral Cloning
 

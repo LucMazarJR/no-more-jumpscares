@@ -2,8 +2,9 @@
 
 Agente RL (PPO/stable-baselines3) que joga o **FNAF 1 real** por captura de tela + mouse, em
 **tempo real** (~0,7s por step — amostra é O recurso escasso). Objetivo: vencer as noites de forma
-estável. **Fase atual:** BC warmstart + termostato de entropia + currículo automático
-(`docs/PACOTE_BC_ENTROPIA.md`).
+estável. **Fase atual (run 3, jul/2026):** RecurrentPPO (LSTM) + estados de idade da informação
+(13-14) + BC warmstart (parcial: só extractor) + termostato de entropia + currículo automático
+(`docs/PACOTE_BC_ENTROPIA.md` §2.7).
 
 ## Comandos canônicos (NÃO renomear/mover os alvos)
 
@@ -29,7 +30,7 @@ main.py                      ponto de entrada (teste|treino|jogar|bc)
 src/environment/fnaf_env.py  ambiente Gymnasium (~1500 linhas): captura, detecção, reward, reset
 src/agent/train.py           treino + callbacks (ControladorEntropia, CurriculumCallback, logs)
 src/agent/behavioral_cloning.py  BC (dataset, treino, transferir_pesos)
-src/agent/multimodal_policy.py   extractor CNN(84x84) + MLP(12 estados) → 256
+src/agent/multimodal_policy.py   extractor CNN(84x84) + MLP(14 estados) → 256
 src/utils/                   ferramentas standalone (python -m src.utils.X) ⚠
 src/utils/referencias/       ⚠ templates de detecção COMMITADOS (morte, menu, ameaças, dígitos)
 scripts/                     smoke test, análise de logs, MongoDB/xlsx, merge (descontinuado)
@@ -46,7 +47,7 @@ debug/                       transiente: fixtures quadro_*.png (usadas por teste
   (Energia fim, Causa, OCORRIDO) vai para `logs/analise/treino_detalhado.log` — é o que os
   parsers preferem. Não adicionar campos na linha de episódio fora dos previstos pelo
   `LOG_PATTERN` (`scripts/enviar_logs_mongodb.py`).
-- **Observação**: Dict com `imagem` (84,84,1) uint8 + `estados` (12,) float32 em [0,1]. Mudar o
+- **Observação**: Dict com `imagem` (84,84,1) uint8 + `estados` (14,) float32 em [0,1]. Mudar o
   shape exige treino do zero; o extractor deriva a dimensão do espaço (nunca hardcodar).
 - **GAMMA=0.997** tem fonte única em `fnaf_env.py` (PPO + VecNormalize + shaping Φ precisam casar).
 - **Reward**: vitória +500, morte −100, denso ~60/noite por TEMPO REAL, shaping potential-based;

@@ -135,6 +135,8 @@ def gravar():
     env.episode_start_time = t0
     env._t_ultima_energia  = t0
     env._t_ultima_camera   = t0
+    env._t_confirmacao_esq = t0   # idade da informação (estados 13-14) parte de "fresco"
+    env._t_confirmacao_dir = t0
     print(">>> Gravando! Jogue até o 6AM e aperte F10. <<<\n")
 
     try:
@@ -221,6 +223,8 @@ def gravar():
                 "energia":          round(env.energia, 2),
                 "tempo_ep":         round(min(env.tempo_jogo, 535.0), 2),
                 "tempo_sem_camera": round(env._tempo_sem_camera(), 2),
+                "idade_info_esq":   round(env._idade_info("esq"), 2),  # run 3: idade da info
+                "idade_info_dir":   round(env._idade_info("dir"), 2),  # (13º-14º estados)
                 "ameaca_esq":       int(env.ameaca_esq),
                 "ameaca_dir":       int(env.ameaca_dir),
             }

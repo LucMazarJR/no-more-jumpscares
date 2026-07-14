@@ -271,6 +271,15 @@ FOXY_SATURACAO_S      = 28.0   # 2× a paciência — normaliza o 12º estado te
 # gasto custar NA HORA sem mover o ótimo. k=4 calibrado p/ "abrir porta com ameaça VELHA
 # compensa": queda de Φ_ameaça ao abrir (0.5) < economia k·ΔE no resto da noite (k·~0.15-0.25).
 PESO_ENERGIA          = _env_float_opcional("FNAF_PESO_ENERGIA", 4.0)
+# IDADE DA INFORMAÇÃO por lado (jul/2026, run 3): a telemetria morte_anim_com_flag≈0 provou
+# que o agente morre CEGO — as flags HELD não têm idade observável ("flag apagada" há 3s ≠ há
+# 200s) e nada paga o check de luz. Estados 13-14 = tempo desde a última leitura DEFINITIVA de
+# cada lado (mesmo padrão do 12º/Foxy, validado pelo crítico EV~0.99), e o Φ ganha o termo
+# −PESO_INFO·(stale_esq+stale_dir): ficar às cegas nos 2 lados custa −0.6 contínuo (≈ reserva
+# de 15% de energia), enquanto um blink de luz (~2s ≈ 0.2% de energia ≈ 0.008 de Φ_energia)
+# zera o lado — o check paga com folga. Observável → telescopa → não move o ótimo.
+PESO_INFO             = _env_float_opcional("FNAF_PESO_INFO", 0.3)
+INFO_SATURACAO_S      = _env_float_opcional("FNAF_INFO_SATURACAO_S", 30.0)
 
 
 class FNAFEnv(gym.Env):
@@ -294,8 +303,8 @@ class FNAFEnv(gym.Env):
             ),
             "estados": spaces.Box(
                 low=0, high=1,
-                shape=(12,),                 # 11 (Decisão 7: +noite) +1 = tempo_sem_camera
-                dtype=np.float32             # (risco do Foxy OBSERVÁVEL — o Φ cobra essa grandeza)
+                shape=(14,),                 # 12 (Decisão 7 + tempo_sem_camera) +2 = idade da
+                dtype=np.float32             # informação esq/dir (run 3 — o Φ cobra essas grandezas)
             )
         })
         self.action_space = spaces.Discrete(len(ACOES))
@@ -320,6 +329,8 @@ class FNAFEnv(gym.Env):
         self._t_ultima_energia = None
         self._dt_step                 = 0.7  # Δt do step (recalculado em _atualizar_energia)
         self._t_ultima_camera         = None  # última vez (perf_counter) com a câmera aberta — 12º estado
+        self._t_confirmacao_esq       = None  # última leitura DEFINITIVA do lado esq — 13º estado
+        self._t_confirmacao_dir       = None  # última leitura DEFINITIVA do lado dir — 14º estado
         self._botao_luz_pressionado   = None
         self.cooldown_porta_esq       = 0  # só bloqueia porta (animação ~0.6s)
         self.cooldown_porta_dir       = 0  # só bloqueia porta (animação ~0.6s)
@@ -584,7 +595,7 @@ class FNAFEnv(gym.Env):
 
         observacao = {
             "imagem": np.zeros((ALTURA, LARGURA, 1), dtype=np.uint8),
-            # Deriva do espaço (hoje 12 estados) p/ não divergir quando a observação mudar
+            # Deriva do espaço (hoje 14 estados) p/ não divergir quando a observação mudar
             "estados": np.zeros(self.observation_space["estados"].shape, dtype=np.float32)
         }
         return observacao, recompensa, True, False, info
@@ -631,6 +642,8 @@ class FNAFEnv(gym.Env):
         self._crash_menu       = False
         self.episode_start_time    = None
         self._t_ultima_camera         = None
+        self._t_confirmacao_esq       = None
+        self._t_confirmacao_dir       = None
         self._botao_luz_pressionado   = None
         self.cooldown_porta_esq       = 0
         self.cooldown_porta_dir       = 0
@@ -673,6 +686,10 @@ class FNAFEnv(gym.Env):
         self.episode_start_time = time.perf_counter()
         self._t_ultima_energia  = self.episode_start_time
         self._t_ultima_camera   = self.episode_start_time  # noite começa "recém-checada" (risco Foxy 0)
+        # Idade da informação idem: à meia-noite os corredores estão comprovadamente vazios
+        # (o jogo dá o grace period) — os relógios partem de "fresco" e envelhecem dali.
+        self._t_confirmacao_esq = self.episode_start_time
+        self._t_confirmacao_dir = self.episode_start_time
 
         print("Reset completo — noite iniciada!")
         observacao = self._capturar_observacao()
@@ -1024,6 +1041,21 @@ class FNAFEnv(gym.Env):
             return 0.0
         return time.perf_counter() - self._t_ultima_camera
 
+    def _idade_info(self, lado: str) -> float:
+        """Segundos REAIS desde a última leitura DEFINITIVA do lado ('esq' | 'dir') — vazio
+        confirmado ou rosto (esq), qualquer leitura com luz acesa (dir). É a idade das flags
+        HELD: ameaca=False velha não garante corredor limpo. Mesma grandeza dos estados 13-14
+        e do termo de informação do Φ — o agente vê exatamente o que o shaping cobra (padrão
+        do 12º estado/Foxy). 0 antes da 1ª âncora (reset ancora no início da noite)."""
+        t = self._t_confirmacao_esq if lado == "esq" else self._t_confirmacao_dir
+        if t is None:
+            return 0.0
+        return time.perf_counter() - t
+
+    def _stale_info(self, lado: str) -> float:
+        """Idade da informação normalizada em [0,1] (satura em INFO_SATURACAO_S)."""
+        return min(self._idade_info(lado) / INFO_SATURACAO_S, 1.0)
+
     def _potencial_seguranca(self) -> float:
         """Φ(estado) do shaping potential-based (Ng, Harada & Russell 1999): o treino recompensa
         só a variação γ·Φ(depois)−Φ(antes) (somada em step()), que telescopa ao longo do episódio
@@ -1036,6 +1068,12 @@ class FNAFEnv(gym.Env):
             e negligenciar baixa, e isso telescopa: NÃO há ganho líquido em acampar (≠ da antiga
             penalidade unilateral, que só punia NÃO-checar → viciava em ficar na câmera). Abaixo da
             paciência o termo é 0, então não há empurrão para a câmera no caso comum.
+          • +PESO_ENERGIA·(energia/100) — reserva de energia (comentário inline abaixo).
+          • −PESO_INFO·(stale_esq + stale_dir) — informação FRESCA é segurança (run 3): flags
+            HELD velhas não garantem nada, e a telemetria provou que o agente morria CEGO
+            (morte_anim_com_flag≈0). O check de luz (~2s ≈ 0.2% de energia) zera o lado; ficar
+            às cegas nos 2 lados custa −2·PESO_INFO contínuo. Todos os 4 termos são funções de
+            grandezas OBSERVÁVEIS (estados 6, 9-10, 12, 13-14) — condição p/ o crítico prever.
         Φ=0 no terminal (forçado em step())."""
         phi = 0.0
         if self.ameaca_esq and self.porta_esq:
@@ -1055,6 +1093,8 @@ class FNAFEnv(gym.Env):
         # cobra o aluguel de cada segundo fechado, tornando rentável a rotina barata
         # "fechar → luz → confirmar vazio → reabrir" (sem precisar abrir p/ conferir).
         phi += PESO_ENERGIA * (self.energia / 100.0)
+        # Informação fresca (run 3): paga o "blink" de luz que faz as flags HELD latacharem.
+        phi -= PESO_INFO * (self._stale_info("esq") + self._stale_info("dir"))
         return phi
 
     def _calcular_recompensa(self, morreu: bool, sobreviveu: bool, acao: int, acao_valida: bool) -> float:
@@ -1122,6 +1162,8 @@ class FNAFEnv(gym.Env):
             float(self.ameaca_dir),
             float(self.noite) / MAX_NOITE,        # Decisão 7: dificuldade da noite
             min(self._tempo_sem_camera() / FOXY_SATURACAO_S, 1.0),  # 12º: risco Foxy observável
+            self._stale_info("esq"),              # 13º: idade da informação esq (run 3)
+            self._stale_info("dir"),              # 14º: idade da informação dir (run 3)
         ], dtype=np.float32)
 
         return {"imagem": frame, "estados": estados}
@@ -1354,13 +1396,18 @@ class FNAFEnv(gym.Env):
             return
         # Bonnie (esquerda) — estado HELD, sem gate de luz (o "vazio confirmado" e o "rosto"
         # já exigem luz acesa; no escuro nada confirma e o estado se mantém).
+        # Toda leitura DEFINITIVA (vazio confirmado OU rosto) re-ancora a idade da informação
+        # do lado (estados 13-14/run 3) — mesmo antes de o debounce completar: a informação
+        # está fresca, o debounce só protege a FLAG do flicker.
         if self._sombra_no_vao(frame_cinza, "esquerdo") > LIMIAR_VAZIO:    # vazio confirmado
+            self._t_confirmacao_esq = time.perf_counter()
             self._presenca_esq = 0                                         # zera o oposto (real)
             self._vazio_esq += 1
             if self._vazio_esq >= DEBOUNCE_VAZIO:
                 self.ameaca_esq = False
                 self._vazio_esq = 0
         elif self._match_ameaca(frame_cinza, "esquerdo") > LIMIAR_AMEACA:  # rosto confirmado
+            self._t_confirmacao_esq = time.perf_counter()
             self._vazio_esq = 0                                            # zera o oposto (real)
             self._presenca_esq += 1
             if self._presenca_esq >= DEBOUNCE_PRESENCA:
@@ -1368,8 +1415,10 @@ class FNAFEnv(gym.Env):
                 self._presenca_esq = 0
         # else: sombra/escuro → MANTÉM estado e contadores (a estática não reseta a confirmação)
 
-        # Chica (direita) — depende da luz direita; independe da porta (sempre rosto)
+        # Chica (direita) — depende da luz direita; independe da porta (sempre rosto).
+        # Com a luz acesa a leitura é definitiva nos dois sentidos (rosto ou janela vazia).
         if self.luz_dir:
+            self._t_confirmacao_dir = time.perf_counter()
             presente_dir = self._match_ameaca(frame_cinza, "direito") > LIMIAR_AMEACA
             self._aplicar_deteccao_ameaca("ameaca_dir", "_vazio_dir", presente_dir)
 

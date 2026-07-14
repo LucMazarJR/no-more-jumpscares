@@ -126,7 +126,13 @@ Foxy é observável) → o PPO feedforward volta a ser suficiente (ver 2.7).
 > acampamento sumiu e as mortes por energia restantes duram 8,0 min (noite = 8,9) — o gargalo
 > migrou p/ defesa (ver atualização do §2.1: entropia forçada). Telemetria nova p/ o próximo
 > diagnóstico: `custom/noite_N/morte_anim_com_flag` separa morrer CEGO (flag apagada → falta
-> disciplina de luz) de morrer VENDO (flag acesa → política/entropia). O potencial de energia telescopa como os
+> disciplina de luz) de morrer VENDO (flag acesa → política/entropia).
+> **Run 3 (14/07/2026):** a telemetria cravou "morre CEGO" → o Φ ganhou o QUARTO termo,
+> `−PESO_INFO·(stale_esq+stale_dir)` (knob `FNAF_PESO_INFO`, default 0.3/lado, saturação
+> `FNAF_INFO_SATURACAO_S=30s`), sobre os NOVOS estados 13-14 (idade da informação de cada
+> lado — mesmo padrão do 12º/Foxy). Ficar às cegas nos 2 lados custa −0,6 contínuo; um blink
+> de luz (~2s ≈ 0,2% de energia ≈ 0,008 no termo de energia) zera o lado — o check paga com
+> folga. Ver §2.7 (LSTM) p/ o pacote completo da run 3. O potencial de energia telescopa como os
 > demais (mesma GAMMA, não move o ótimo) e faz cada % gasto custar NA HORA. De quebra, a run
 > validou o 12º estado: nosso crítico fechou com explained_variance ~0,99, enquanto o build
 > "cego" do PC 2 (sem percepção — ver AVALIACAO_TREINO_PC_CEGO.md) degrada o crítico após 100k
@@ -205,29 +211,32 @@ execução limpa. A telemetria vai para `logs/analise/treino_detalhado.log`: mes
 Também: `custom/win_rate_50` (mudou do antigo schedule para `MetricasPorNoite`) e
 `ameaca_esq/dir` no info de cada step.
 
-### 2.7 Feedforward nesta fase (`FNAF_USAR_LSTM=0` no .env)
+### 2.7 Memória: feedforward nas runs 1-2 → LSTM + estados de idade na run 3
 
-**Problema:** com RecurrentPPO, o `transferir_pesos` do BC só aproveita o `MultimodalExtractor`
-(percepção) — as cabeças de decisão clonadas são jogadas fora (shapes não casam com a LSTM).
-Com amostras a 0.7s cada, desperdiçar o artefato mais caro do pacote não faz sentido.
+**Fase original (runs 1-2):** PPO feedforward, porque com RecurrentPPO o `transferir_pesos`
+do BC só aproveita o `MultimodalExtractor` — as cabeças clonadas são jogadas fora (shapes não
+casam com a LSTM) — e o 12º estado + ameaças HELD removiam o motivo ORIGINAL da LSTM (Foxy).
+O gatilho objetivo para reabrir era: estagnar com `morte_animatronico` dominante "morrendo do
+que não dá para ver sem memória".
 
-**Solução:** PPO feedforward nesta fase → BC transfere 100% dos tensores (extractor +
-mlp_extractor + action_net + value_net; confira o print `[BC warmstart] transferidos N/N`).
-O 12º estado (2.3) + ameaças HELD removeram o motivo original da LSTM (Foxy).
-
-**Gatilho OBJETIVO para reabrir o A/B da LSTM:** dominada a Noite 2, se o agente estagnar na
-3+ com `morte_animatronico` dominante SEM ameaça registrada no info terminal (= morreu do que
-não dá para ver sem memória, ex.: Freddy), teste `FNAF_USAR_LSTM=1` — o extractor do BC ainda
-transfere.
-
-**Alternativa mais barata que a LSTM se o problema for ESPECIFICAMENTE o Foxy** (jul/2026):
-hoje o risco Foxy é só relógio (Φ paciência 14s fixa + 12º estado) — malha aberta em relação
-ao Foxy REAL, que é estocástico e acelera por noite. Se nas noites 3+ a assinatura for
-`morte_animatronico` com porta esquerda ABERTA e apagões baixos (relógio mal calibrado), a
-opção feedforward-compatível é um 13º estado "último estágio do Foxy visto na CAM 1C"
-(template dos 4 estágios do Pirate Cove) + staleness: o valor só atualiza se o agente ABRIR a
-câmera certa — vira fonte de informação genuína, não ritual. Custa mudança de shape (12→13+)
-⇒ treino do zero; empacotar com o próximo restart, nunca no meio de uma run.
+> **GATILHO DISPARADO (14/07/2026 → run 3).** A telemetria `morte_anim_com_flag` ≈ 0-14% na
+> run 2 provou que o agente morre CEGO: as flags HELD nunca acendem porque nada paga o check
+> de luz, e flag apagada não tem IDADE ("confirmado vazio há 3s" ≠ "não olho há 200s") — a
+> variante estrutural do gatilho. Decisão do usuário: **LSTM + estados 13-14 COMBINADOS** —
+> a mesma janela de restart paga os dois; os estados entregam o relógio pronto (a LSTM não
+> gasta amostra aprendendo a contar) e tornam o termo de informação do Φ observável/seguro;
+> a memória fica livre pro que só ela faz (reter o que viu DENTRO da câmera, padrões).
+> Atribuição individual borrada de propósito — `sonda_memoria` e `jogar --ablacao` decompõem
+> depois.
+>
+> Consequências práticas: `FNAF_USAR_LSTM=1` no .env da máquina de treino; treino do zero
+> (obs 12→14 muda shape); BC re-treinado (`main.py bc` — o dataset reconstrói
+> idade_info_esq/dir offline nos datasets antigos) e transferência PARCIAL (só extractor —
+> heads+LSTM aleatórias) ⇒ **começo mais lento que a run 2 é esperado**;
+> `FNAF_WARMUP_FRAC=0` (o warmup protege um ator clonado — com heads aleatórias não há o que
+> proteger). Métrica-chave da run: `morte_anim_com_flag` SUBINDO (morrer VENDO = luz sendo
+> usada = flags latacham) e depois `morte_animatronico` caindo. Pré-voo obrigatório:
+> `python -m src.utils.testar_masking` com `FNAF_USAR_LSTM=1`.
 
 ### 2.8 `n_steps` 8192 → 4096 (`FNAF_N_STEPS`)
 
@@ -247,7 +256,7 @@ valem em treino FRESCO (`--novo`).
 
 ```
 venv\Scripts\python scripts\inspecionar_vecnormalize.py     # evidência do clip (seção 1)
-venv\Scripts\python scripts\smoke_test.py                   # 6/6 OK (espaço (12,), extractor, BC)
+venv\Scripts\python scripts\smoke_test.py                   # 6/6 OK (espaço (14,), extractor, BC)
 venv\Scripts\python -m src.utils.testar_recompensa          # 13/13 OK (Φ em tempo real)
 venv\Scripts\python -m src.utils.testar_noite               # 11/11 OK (decidir_reset)
 ```

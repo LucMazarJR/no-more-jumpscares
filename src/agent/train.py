@@ -10,7 +10,7 @@ from stable_baselines3 import PPO
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from src.environment.fnaf_env import FNAFEnv, GAMMA, MAX_NOITE, RESET_METODO, PESO_ENERGIA
+from src.environment.fnaf_env import FNAFEnv, GAMMA, MAX_NOITE, RESET_METODO, PESO_ENERGIA, PESO_INFO
 from src.agent.multimodal_policy import MultimodalExtractor
 
 PASTA_MODELOS = "modelos"
@@ -348,7 +348,13 @@ class ControladorEntropia(BaseCallback):
         return WARMUP_FRAC > 0 and self.model._current_progress_remaining > 1.0 - WARMUP_FRAC
 
     def _on_training_start(self) -> None:
-        self.model.ent_coef = self.ent_min if self._em_warmup() else self.ent_inicial
+        if self._em_warmup():
+            self.model.ent_coef = self.ent_min
+        elif self.model.num_timesteps == 0:      # modelo FRESCO: parte do valor inicial
+            self.model.ent_coef = self.ent_inicial
+        # RETOMADA: mantém o ent_coef salvo no checkpoint. Re-aplicar ENT_INICIO (0.02) a cada
+        # restart re-derretia a política — o controlador levava ~25k steps (6 rollouts) p/
+        # derrubar de volta ao piso (medido na retomada 128k→231k, sessões 5-6).
 
     def _on_step(self) -> bool:
         return True
@@ -567,15 +573,20 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     print("Iniciando ambiente FNAF1...")
     print("ATENÇÃO: Deixe o jogo aberto e na tela inicial!")
     print("Dica: segure F12 a qualquer momento para pausar.\n")
-    # Guarda anti-incidente: o .env é LOCAL por máquina (git-ignorado) — um `git pull` NÃO
-    # atualiza a fase. Uma run de 27h já foi queimada por FNAF_USAR_LSTM=1 esquecido.
+    # Lembrete: o .env é LOCAL por máquina (git-ignorado) — um `git pull` NÃO atualiza a fase.
+    # A fase LSTM abriu em 14/07/2026 (run 3): o gatilho do §2.7 do PACOTE disparou com a
+    # telemetria morte_anim_com_flag ≈ 0 (morre CEGO). Run 3 = RecurrentPPO + estados 13-14.
     if USAR_LSTM:
         print("=" * 70)
-        print("AVISO: FNAF_USAR_LSTM=1 -> este treino usara RecurrentPPO (LSTM).")
-        print("A fase atual do projeto e FEEDFORWARD + BC warmstart (FNAF_USAR_LSTM=0);")
-        print("a LSTM so volta no A/B apos o gatilho de docs/PACOTE_BC_ENTROPIA.md secao 2.7.")
-        print("Confirme que e intencional — o .env desta maquina NAO vem com o git pull.")
+        print("FNAF_USAR_LSTM=1 -> RecurrentPPO (LSTM, hidden 128, 1 camada, critic_lstm).")
+        print("Fase run 3 (14/07/2026): LSTM + estados de idade da informacao (13-14).")
+        print("Pre-voo obrigatorio: python -m src.utils.testar_masking (offline).")
+        print("Com --bc a transferencia e PARCIAL (so o extractor) — comeco mais lento que")
+        print("o feedforward era esperado; regua de metas no PACOTE_BC_ENTROPIA.md.")
         print("=" * 70)
+    else:
+        print("[fase] FNAF_USAR_LSTM=0 (feedforward) — a run 3 (14/07/2026+) usa LSTM=1;"
+              " confirme o .env desta maquina.")
     time.sleep(3)
 
     env_base = DummyVecEnv([lambda: FNAFEnv()])
@@ -645,7 +656,8 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     modelo.n_epochs  = N_EPOCHS
     modelo.target_kl = TARGET_KL
     print(f"[hparams] n_steps={modelo.n_steps} batch={modelo.batch_size} n_epochs={N_EPOCHS} "
-          f"target_kl={TARGET_KL} clip_reward={CLIP_REWARD} peso_energia={PESO_ENERGIA} | "
+          f"target_kl={TARGET_KL} clip_reward={CLIP_REWARD} peso_energia={PESO_ENERGIA} "
+          f"peso_info={PESO_INFO} | "
           f"ent_coef inicial {ENT_INICIO} | "
           f"controlador: H {H_INICIO}->{H_FIM} nats, ent [{ENT_MIN}, {ENT_MAX}], ganho {ENT_GANHO}"
           + (f" | warmup do crítico: {WARMUP_FRAC*100:.0f}% do treino (clip {WARMUP_CLIP})"

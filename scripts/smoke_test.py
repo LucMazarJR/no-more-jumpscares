@@ -4,8 +4,8 @@ Roda na raiz do projeto:
     venv\\Scripts\\python scripts\\smoke_test.py
 
 Verifica:
-  1. FNAFEnv constrói (templates + .env ok) e o espaço de observação tem 12 estados
-  2. Episódio interrompido devolve observação compatível com o espaço (shape 12)
+  1. FNAFEnv constrói (templates + .env ok) e o espaço de observação tem 14 estados
+  2. Episódio interrompido devolve observação compatível com o espaço (shape 14)
   3. Modelo PPO constrói com a MultimodalExtractor
   4. A CNN recebe pixels em [0, 1] — sem dupla normalização (bug antigo: ~0.004)
   5. model.predict funciona com observação do ambiente (channels-last)
@@ -29,17 +29,17 @@ def main():
 
     # 1. Ambiente constrói e espaço correto
     env = FNAFEnv()
-    assert env.observation_space["estados"].shape == (12,), \
-        f"estados shape: {env.observation_space['estados'].shape}"
+    n_estados = env.observation_space["estados"].shape[0]
+    assert n_estados == 14, f"estados shape: {env.observation_space['estados'].shape}"
     assert env.observation_space["imagem"].shape == (84, 84, 1)
-    print("[OK] 1. FNAFEnv construido — espaco de observacao: imagem(84,84,1) + estados(12)")
+    print(f"[OK] 1. FNAFEnv construido — espaco de observacao: imagem(84,84,1) + estados({n_estados})")
 
     # 2. Episódio interrompido devolve obs válida (sem tentar reabrir o jogo)
     env._abrir_jogo_fallback = lambda: False
     obs_int, _, terminado, _, info = env._interromper_episodio("smoke test")
     assert env.observation_space.contains(obs_int), "obs interrompida fora do espaco!"
     assert terminado and info.get("interrompido")
-    print("[OK] 2. Episodio interrompido devolve observacao compativel (estados shape 12)")
+    print(f"[OK] 2. Episodio interrompido devolve observacao compativel (estados shape {n_estados})")
 
     # 3. Modelo PPO com a extractor multimodal (mesma config do train.py)
     modelo = PPO(
@@ -59,7 +59,7 @@ def main():
     )
     obs_branca = {
         "imagem": np.full((84, 84, 1), 255, dtype=np.uint8),
-        "estados": np.zeros(12, dtype=np.float32),
+        "estados": np.zeros(n_estados, dtype=np.float32),
     }
     acao, _ = modelo.predict(obs_branca, deterministic=True)
     hook.remove()
@@ -79,7 +79,7 @@ def main():
     # 6. Caminho do behavioral cloning: batch channels-last direto na policy
     obs_bc = {
         "imagem": th.zeros(4, 84, 84, 1, dtype=th.uint8),
-        "estados": th.zeros(4, 12, dtype=th.float32),
+        "estados": th.zeros(4, n_estados, dtype=th.float32),
     }
     dist = modelo.policy.get_distribution(obs_bc)
     log_probs = dist.log_prob(th.zeros(4, dtype=th.long))

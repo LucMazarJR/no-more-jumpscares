@@ -48,7 +48,7 @@ Os comandos completos estão no [README](../README.md) e no [VALIDACAO_E_TESTES.
 - `testar_deteccao_menu` — score do template de menu/morte/vitória ao vivo
 
 **Testes offline (jogo fechado, segundos)**
-- `testar_recompensa` — sanidade da função de recompensa e do shaping Φ (13 invariantes)
+- `testar_recompensa` — sanidade da função de recompensa e do shaping Φ (17 invariantes)
 - `testar_noite` — lógica de reset/currículo (`decidir_reset`, 11 casos)
 - `testar_deteccao_ameaca` / `testar_deteccao_energia` — detectores contra fixtures de `debug/`
 - `testar_masking` / `sonda_memoria` — LSTM (reset de memória / uso de recorrência) — p/ o A/B futuro

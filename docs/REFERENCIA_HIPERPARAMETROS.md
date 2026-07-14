@@ -17,6 +17,8 @@ o que os logs estão mostrando e prever o efeito de qualquer ajuste.
 > `FNAF_CLIP_REWARD`, `FNAF_ENT_INICIO`, `FNAF_H_INICIO/H_FIM`, `FNAF_ENT_MIN/MAX/GANHO/PASSO_MAX`,
 > `FNAF_CURRICULO_LIMIAR`, `FNAF_PESO_ENERGIA` (potencial da reserva de energia no Φ, default
 > 4.0 — adicionado após a 1ª run do pacote diagnosticar morte por apagão sistemático),
+> `FNAF_PESO_INFO`/`FNAF_INFO_SATURACAO_S` (run 3: potencial da informação fresca por lado,
+> default 0.3/30s, sobre os estados 13-14 — a run 2 morria CEGA, `morte_anim_com_flag`≈0),
 > `FNAF_WARMUP_FRAC/WARMUP_CLIP` (warmup do crítico p/ treino fresco
 > com `--bc`: o BC clona só o ator; o crítico chega aleatório e aprende V com o ator quase
 > parado — clip_range 0.03 e ent_coef em ENT_MIN — nos primeiros ~8% do treino).
@@ -339,10 +341,11 @@ chave por seu próprio extrator. Neste projeto, a chave `"imagem"` passa pela CN
 recebem como entrada.
 
 Isso é relevante porque **mudanças na dimensão de qualquer campo invalidam o modelo
-salvo**. Hoje são **12 estados** (o 12º, `tempo_sem_camera`, entrou no pacote de julho/2026);
-se virarem 13, o `Linear` de entrada do MLP não carrega os pesos antigos (o extractor já
-deriva a dimensão do espaço, mas os PESOS não migram). Qualquer modificação no
-`observation_space` exige reinício do treinamento do zero.
+salvo**. Hoje são **14 estados** (12º = `tempo_sem_camera`, pacote de julho/2026; 13º-14º =
+idade da informação esq/dir, run 3 de 14/07/2026); se a dimensão mudar de novo, o `Linear`
+de entrada do MLP não carrega os pesos antigos (o extractor já deriva a dimensão do espaço,
+mas os PESOS não migram). Qualquer modificação no `observation_space` exige reinício do
+treinamento do zero.
 
 ---
 

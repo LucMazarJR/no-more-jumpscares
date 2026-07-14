@@ -15,6 +15,7 @@ import time
 from src.environment.fnaf_env import (
     FNAFEnv, ACOES, CHECKPOINTS_NOITE, GAMMA,
     RECOMPENSA_NOITE, BONUS_MARCO_HORA, FOXY_PACIENCIA_S, PESO_ENERGIA,
+    PESO_INFO, INFO_SATURACAO_S,
 )
 
 NOME_PARA_ACAO = {nome: i for i, nome in ACOES.items()}
@@ -36,6 +37,8 @@ def _novo_env() -> FNAFEnv:
     env.penultima_acao = None
     env.contador_nada = 0
     env._t_ultima_camera = None
+    env._t_confirmacao_esq = None   # None = informacao fresca (idade 0), como no reset
+    env._t_confirmacao_dir = None
     env._horas_bonificadas = set()
     env._total_bonus_hora = 0.0
     env.ameaca_esq = False
@@ -142,11 +145,14 @@ def bonus_hora_maximo() -> float:
 
 
 def _phi(*, ameaca_esq=False, porta_esq=False, ameaca_dir=False, porta_dir=False,
-         tempo_sem_camera=0.0, energia=100.0) -> float:
+         tempo_sem_camera=0.0, energia=100.0,
+         idade_info_esq=0.0, idade_info_dir=0.0) -> float:
     env = _novo_env()
     env.ameaca_esq, env.porta_esq = ameaca_esq, porta_esq
     env.ameaca_dir, env.porta_dir = ameaca_dir, porta_dir
     env._t_ultima_camera = time.perf_counter() - tempo_sem_camera
+    env._t_confirmacao_esq = time.perf_counter() - idade_info_esq
+    env._t_confirmacao_dir = time.perf_counter() - idade_info_dir
     env.energia = energia
     return env._potencial_seguranca()
 
@@ -206,10 +212,11 @@ def test_phi_bloqueio_supera_exposto():
 
 def test_phi_sem_ameaca_so_reserva_de_energia():
     # Sem ameaca e com camera fresca, fechar porta nao da seguranca: Phi e SO a reserva
-    # de energia (e com bateria zerada e nada mais em jogo, Phi = 0).
-    assert _phi(ameaca_esq=False, porta_esq=True, ameaca_dir=False, porta_dir=True,
-                energia=70.0) == _phi(energia=70.0)
-    assert abs(_phi(energia=0.0)) < 1e-9
+    # de energia (e com bateria zerada e nada mais em jogo, Phi = 0). Tolerancia 1e-6:
+    # o termo de informacao anda ~us entre o set da ancora e a leitura (perf_counter).
+    assert abs(_phi(ameaca_esq=False, porta_esq=True, ameaca_dir=False, porta_dir=True,
+                    energia=70.0) - _phi(energia=70.0)) < 1e-6
+    assert abs(_phi(energia=0.0)) < 1e-6
 
 
 def test_phi_energia_monotonica():
@@ -241,8 +248,30 @@ def test_phi_foxy_tolera_ate_paciencia():
     # Ate a paciencia, o risco do Foxy e 0 — sem empurrao para a camera no caso comum
     # (e o oposto da antiga penalidade unilateral, que so punia NAO-checar).
     # Margem de 50ms abaixo do limiar: a leitura por perf_counter avanca ~us entre
-    # o set e o calculo, e exatamente NO limiar o teste ficaria flaky.
-    assert _phi(tempo_sem_camera=FOXY_PACIENCIA_S - 0.05) == _phi(tempo_sem_camera=0.0)
+    # o set e o calculo, e exatamente NO limiar o teste ficaria flaky. Tolerancia 1e-6
+    # pela mesma deriva no termo de informacao (estados 13-14).
+    assert abs(_phi(tempo_sem_camera=FOXY_PACIENCIA_S - 0.05)
+               - _phi(tempo_sem_camera=0.0)) < 1e-6
+
+
+def test_phi_info_fresca_supera_cega():
+    # Informacao velha (flags HELD sem re-confirmacao) e menos segura que fresca — e a
+    # faixa completa do termo e 2*PESO_INFO (um lado saturado = PESO_INFO).
+    fresca = _phi()
+    cega = _phi(idade_info_esq=INFO_SATURACAO_S, idade_info_dir=INFO_SATURACAO_S)
+    assert fresca > cega
+    assert abs((fresca - cega) - 2 * PESO_INFO) < 1e-6
+
+
+def test_phi_blink_de_luz_compensa():
+    # O check barato: re-confirmar um lado saturado (~2s de luz ~ 0.2% de energia) tem de
+    # render mais Phi do que o custo energetico do blink — senao o gradiente nunca paga a
+    # disciplina de luz (a run 2 morreu CEGA justamente por nada pagar o check).
+    e0 = 70.0
+    custo_blink = 0.100 * 2.0                     # %% de bateria de ~2s de luz
+    cego  = _phi(idade_info_esq=INFO_SATURACAO_S, energia=e0)
+    checou = _phi(idade_info_esq=0.0, energia=e0 - custo_blink)
+    assert checou > cego
 
 
 def test_shaping_telescopa():
@@ -285,6 +314,8 @@ SHAPING = [
     test_shaping_gastar_energia_custa_no_step,
     test_phi_foxy_reduz_seguranca,
     test_phi_foxy_tolera_ate_paciencia,
+    test_phi_info_fresca_supera_cega,
+    test_phi_blink_de_luz_compensa,
     test_shaping_telescopa,
 ]
 

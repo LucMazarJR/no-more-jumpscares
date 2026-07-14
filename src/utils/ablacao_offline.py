@@ -43,15 +43,15 @@ DEBUG = Path("debug")
 # Frames reais e VARIADOS (imagens distintas do jogo) — só os que existirem são usados.
 FRAMES = ["escritorio", "luz_esq_bonnie", "luz_dir_chica", "luz_esq_vazia", "power_10", "no_power"]
 
-# Vetores de estado plausíveis e variados (12 estados, em [0,1]) — espelha _capturar_observacao:
+# Vetores de estado plausíveis e variados (14 estados, em [0,1]) — espelha _capturar_observacao:
 # [porta_esq, porta_dir, luz_esq, luz_dir, camera, camera_ativa, energia, tempo,
-#  ameaca_esq, ameaca_dir, noite/7, tempo_sem_camera/28s]
+#  ameaca_esq, ameaca_dir, noite/7, tempo_sem_camera/28s, idade_info_esq/30s, idade_info_dir/30s]
 ESTADOS = [
-    np.array([0, 0, 0, 0, 0, 0.0, 1.00, 0.00, 0, 0, 0.14, 0.0], dtype=np.float32),  # início calmo, cheio (N1)
-    np.array([0, 0, 1, 0, 0, 0.0, 0.80, 0.20, 1, 0, 0.29, 0.3], dtype=np.float32),  # ameaça esq, porta aberta (N2)
-    np.array([1, 0, 1, 0, 0, 0.0, 0.70, 0.30, 1, 0, 0.29, 0.5], dtype=np.float32),  # ameaça esq, porta fechada (N2)
-    np.array([0, 1, 0, 1, 0, 0.0, 0.50, 0.60, 0, 1, 0.43, 0.8], dtype=np.float32),  # ameaça dir, Foxy negligenciado (N3)
-    np.array([0, 0, 0, 0, 1, 0.5, 0.20, 0.85, 0, 0, 0.71, 0.0], dtype=np.float32),  # tarde, pouca energia, câmera (N5)
+    np.array([0, 0, 0, 0, 0, 0.0, 1.00, 0.00, 0, 0, 0.14, 0.0, 0.0, 0.0], dtype=np.float32),  # início calmo, cheio (N1)
+    np.array([0, 0, 1, 0, 0, 0.0, 0.80, 0.20, 1, 0, 0.29, 0.3, 0.0, 0.6], dtype=np.float32),  # ameaça esq, porta aberta (N2)
+    np.array([1, 0, 1, 0, 0, 0.0, 0.70, 0.30, 1, 0, 0.29, 0.5, 0.1, 0.8], dtype=np.float32),  # ameaça esq, porta fechada (N2)
+    np.array([0, 1, 0, 1, 0, 0.0, 0.50, 0.60, 0, 1, 0.43, 0.8, 0.9, 0.0], dtype=np.float32),  # ameaça dir, Foxy negligenciado (N3)
+    np.array([0, 0, 0, 0, 1, 0.5, 0.20, 0.85, 0, 0, 0.71, 0.0, 1.0, 1.0], dtype=np.float32),  # tarde, pouca energia, câmera (N5)
 ]
 
 

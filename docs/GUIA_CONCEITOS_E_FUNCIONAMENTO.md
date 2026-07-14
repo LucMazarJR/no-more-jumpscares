@@ -118,24 +118,31 @@ multimodal — duas modalidades de dado diferentes):
 ```text
 observação = {
     "imagem":  matriz 84 × 84 × 1  (a tela do jogo, reduzida e em tons de cinza)
-    "estados": vetor de 12 números (todos normalizados entre 0 e 1)
+    "estados": vetor de 14 números (todos normalizados entre 0 e 1)
 }
 ```
 
-Os 12 estados, na ordem exata do código:
+Os 14 estados, na ordem exata do código:
 
 ```text
-[0] porta_esquerda   (0/1)         [6]  energia / 100         (0.0–1.0)
-[1] porta_direita    (0/1)         [7]  tempo_jogo / 535      (0.0–1.0)
-[2] luz_esquerda     (0/1)         [8]  ameaça_esquerda (0/1)
-[3] luz_direita      (0/1)         [9]  ameaça_direita  (0/1)
-[4] camera_aberta    (0/1)         [10] noite / 7            (dificuldade)
-[5] camera_ativa / 11              [11] tempo_sem_camera / 28s (risco do Foxy)
+[0] porta_esquerda   (0/1)         [7]  tempo_jogo / 535      (0.0–1.0)
+[1] porta_direita    (0/1)         [8]  ameaça_esquerda (0/1)
+[2] luz_esquerda     (0/1)         [9]  ameaça_direita  (0/1)
+[3] luz_direita      (0/1)         [10] noite / 7            (dificuldade)
+[4] camera_aberta    (0/1)         [11] tempo_sem_camera / 28s (risco do Foxy)
+[5] camera_ativa / 11              [12] idade_info_esq / 30s  (run 3)
+[6] energia / 100    (0.0–1.0)     [13] idade_info_dir / 30s  (run 3)
 ```
 
 > O 12º estado (`tempo_sem_camera`) entrou no pacote de julho/2026: o shaping do Foxy já punia
 > "câmera negligenciada", mas o agente **não via** há quanto tempo não checava — era punido por
 > uma variável fora da observação. Agora vê exatamente o que o reward cobra.
+
+> Os estados 13-14 (`idade_info_esq/dir`, run 3 de 14/07/2026) aplicam a MESMA lição às flags
+> de ameaça: `ameaça=0` só significa "a última confirmação foi vazio" — sem a idade dessa
+> confirmação, o agente não distingue "acabei de checar" de "não olho há 200s" (e a telemetria
+> provou que ele morria cego). O relógio zera a cada leitura definitiva do lado (luz acesa) e
+> o Φ cobra a mesma grandeza (informação fresca = segurança).
 
 > **Onde no código:** o vetor é montado em `_capturar_observacao`
 > ([fnaf_env.py:1086](../src/environment/fnaf_env.py#L1086)).
@@ -208,16 +215,16 @@ uma jogada foi boa, o crítico dá um palpite imediato. (Detalhes na Parte 5, "v
 
 ### 3.4 Como isso vira uma rede neural — o `MultimodalExtractor`
 
-A imagem e os 12 estados são tipos de dado muito diferentes, então cada um passa por um caminho
-próprio antes de se juntarem:
+A imagem e os 14 estados são tipos de dado muito diferentes, então cada um passa por um caminho
+próprio antes de se juntarem (o MLP deriva a largura do espaço de observação — hoje 14):
 
 ```text
-   imagem 84×84×1                      estados [11]
+   imagem 84×84×1                      estados [14]
         │                                  │
         ▼                                  ▼
  ┌──────────────┐                   ┌──────────────┐
  │     CNN      │                   │  MLP pequeno │
- │ (3 camadas   │                   │ Linear(11→32)│
+ │ (3 camadas   │                   │ Linear(14→32)│
  │  convoluc.)  │                   │   + ReLU     │
  └──────────────┘                   └──────────────┘
         │ 3136 números                     │ 32 números
@@ -612,7 +619,7 @@ VecNormalize(norm_obs=False, norm_reward=True, gamma=0.997)
 - `norm_reward=True` → **normaliza a recompensa** (divide por um desvio-padrão móvel do retorno).
   Isso evita que os terminais grandes (+500/−100) desestabilizem o crítico.
 - `norm_obs=False` → **NÃO normaliza a observação**. A observação já vem pronta: a imagem é
-  normalizada pelo próprio SB3 (pixels → 0–1) e os 12 estados já são montados entre 0 e 1 no
+  normalizada pelo próprio SB3 (pixels → 0–1) e os 14 estados já são montados entre 0 e 1 no
   ambiente. Normalizar de novo seria redundante e poderia distorcer.
 
 > **Onde no código:** [train.py:296](../src/agent/train.py#L296).

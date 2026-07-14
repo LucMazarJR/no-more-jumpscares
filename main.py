@@ -3,7 +3,7 @@ import os
 import re
 import sys
 
-from src.environment.fnaf_env import FNAFEnv, MAX_NOITE, FOXY_SATURACAO_S
+from src.environment.fnaf_env import FNAFEnv, MAX_NOITE, FOXY_SATURACAO_S, INFO_SATURACAO_S
 
 
 def encontrar_ultimo_modelo() -> str | None:
@@ -43,6 +43,8 @@ def modo_teste():
     print(f"  - Ameaça direita: {obs['estados'][9]}")
     print(f"  - Noite: {obs['estados'][10] * MAX_NOITE:.0f}")
     print(f"  - Tempo sem câmera: {obs['estados'][11] * FOXY_SATURACAO_S:.1f}s")
+    print(f"  - Idade da info esq: {obs['estados'][12] * INFO_SATURACAO_S:.1f}s")
+    print(f"  - Idade da info dir: {obs['estados'][13] * INFO_SATURACAO_S:.1f}s")
     input("O jogo iniciou a noite 1? (aperta Enter para confirmar)")
     env.close()
 

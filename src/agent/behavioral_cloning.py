@@ -8,23 +8,56 @@ import torch
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, Subset, WeightedRandomSampler
 from stable_baselines3 import PPO
-from src.environment.fnaf_env import FNAFEnv, MAX_NOITE, ACOES, FOXY_SATURACAO_S
+from src.environment.fnaf_env import FNAFEnv, MAX_NOITE, ACOES, FOXY_SATURACAO_S, INFO_SATURACAO_S
 from src.agent.multimodal_policy import MultimodalExtractor
 from pathlib import Path
 
 NUM_ACOES = 17
 
+
+def _reconstruir_idade_info(dados: list[dict]) -> int:
+    """Preenche idade_info_esq/dir (estados 13-14, run 3) em datasets gravados ANTES deles.
+
+    Proxy honesto da regra do env (que re-ancora a idade a cada leitura DEFINITIVA do lado):
+    aqui a âncora é "luz do lado acesa com a câmera fechada" (a leitura definitiva exige luz
+    nos dois lados) ou uma TRANSIÇÃO da flag de ameaça (transição implica confirmação).
+    O relógio parte de "fresco" no 1º frame (espelha o reset do env) e anda por tempo_ep.
+    Grava segundos CRUS — __getitem__ normaliza por INFO_SATURACAO_S (fonte única).
+    Datasets novos (gravador run 3) já trazem os campos → retorna 0 sem tocar em nada."""
+    if not dados or "idade_info_esq" in dados[0]:
+        return 0
+    t_conf = {"esq": 0.0, "dir": 0.0}
+    ameaca_prev = {"esq": None, "dir": None}
+    for d in dados:
+        t = float(d.get("tempo_ep", 0.0))
+        cam_fechada = not d.get("camera_aberta", 0)
+        for lado in ("esq", "dir"):
+            ameaca = d.get(f"ameaca_{lado}")
+            if (cam_fechada and d.get(f"luz_{lado}", 0)) or \
+               (ameaca_prev[lado] is not None and ameaca != ameaca_prev[lado]):
+                t_conf[lado] = t
+            ameaca_prev[lado] = ameaca
+            d[f"idade_info_{lado}"] = round(max(t - t_conf[lado], 0.0), 2)
+    return len(dados)
+
+
 class GameplayDataset(Dataset):
     def __init__(self, caminhos_json: list[str]):
         self.dados = []
 
+        reconstruidos = 0
         for caminho in caminhos_json:
             with open(caminho, "r") as f:
                 dados = json.load(f)
+                reconstruidos += _reconstruir_idade_info(dados)   # datasets pré-run-3 (12 estados)
                 self.dados.extend(dados)
                 print(f"Carregado: {caminho} ({len(dados)} frames)")
 
         print(f"\nTotal combinado: {len(self.dados)} frames")
+        if reconstruidos:
+            print(f"[run 3] idade_info_esq/dir RECONSTRUÍDA em {reconstruidos} frames "
+                  f"(datasets gravados antes dos estados 13-14 — proxy: tempo desde a última "
+                  f"luz acesa do lado com câmera fechada)")
 
         acoes_reais = [d for d in self.dados if d["acao"] != 0]
         print(f"Frames com ação real: {len(acoes_reais)}")
@@ -63,7 +96,7 @@ class GameplayDataset(Dataset):
             frame = np.zeros((84, 84), dtype=np.uint8)
         frame = np.expand_dims(frame, axis=-1)  # (84, 84, 1)
 
-        # 12 estados normalizados — espelha FNAFEnv._capturar_observacao().
+        # 14 estados normalizados — espelha FNAFEnv._capturar_observacao().
         # Datasets antigos sem os campos de estado usam valores neutros:
         # energia=100 (cheio), tempo=0 (início), demais=0 (inativo). Divisores
         # importados do env (fonte única) — se o env mudar, o BC acompanha.
@@ -80,6 +113,8 @@ class GameplayDataset(Dataset):
             float(dado.get("ameaca_dir", 0)),
             float(dado.get("noite", 1)) / MAX_NOITE,
             min(float(dado.get("tempo_sem_camera", 0.0)) / FOXY_SATURACAO_S, 1.0),  # 12º
+            min(float(dado.get("idade_info_esq", 0.0)) / INFO_SATURACAO_S, 1.0),    # 13º (run 3)
+            min(float(dado.get("idade_info_dir", 0.0)) / INFO_SATURACAO_S, 1.0),    # 14º (run 3)
         ], dtype=np.float32)
 
         acao = int(dado["acao"])
