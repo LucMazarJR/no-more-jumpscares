@@ -41,6 +41,37 @@ def _reconstruir_idade_info(dados: list[dict]) -> int:
     return len(dados)
 
 
+def _imagem_do_frame(dado: dict) -> np.ndarray:
+    """(84,84,1) uint8 — espelha FNAFEnv._capturar_observacao(). Frame ausente = preto."""
+    frame = cv2.imread(dado["frame"], cv2.IMREAD_GRAYSCALE)
+    if frame is None:
+        frame = np.zeros((84, 84), dtype=np.uint8)
+    return np.expand_dims(frame, axis=-1)
+
+
+def _estados_do_frame(dado: dict) -> np.ndarray:
+    """14 estados normalizados — FONTE ÚNICA compartilhada pelo BC feedforward e o recorrente
+    (espelha FNAFEnv._capturar_observacao()). Datasets antigos sem os campos usam valores
+    neutros: energia=100, tempo=0, demais=0. Divisores importados do env (se o env mudar, o
+    BC acompanha)."""
+    return np.array([
+        float(dado.get("porta_esq", 0)),
+        float(dado.get("porta_dir", 0)),
+        float(dado.get("luz_esq", 0)),
+        float(dado.get("luz_dir", 0)),
+        float(dado.get("camera_aberta", 0)),
+        float(dado.get("camera_ativa", 0)) / 11.0,
+        float(dado.get("energia", 100)) / 100.0,
+        min(float(dado.get("tempo_ep", 0)) / 535.0, 1.0),
+        float(dado.get("ameaca_esq", 0)),
+        float(dado.get("ameaca_dir", 0)),
+        float(dado.get("noite", 1)) / MAX_NOITE,
+        min(float(dado.get("tempo_sem_camera", 0.0)) / FOXY_SATURACAO_S, 1.0),  # 12º
+        min(float(dado.get("idade_info_esq", 0.0)) / INFO_SATURACAO_S, 1.0),    # 13º (run 3)
+        min(float(dado.get("idade_info_dir", 0.0)) / INFO_SATURACAO_S, 1.0),    # 14º (run 3)
+    ], dtype=np.float32)
+
+
 class GameplayDataset(Dataset):
     def __init__(self, caminhos_json: list[str]):
         self.dados = []
@@ -89,41 +120,11 @@ class GameplayDataset(Dataset):
 
     def __getitem__(self, idx):
         dado = self.dados[idx]
-
-        # Carrega imagem
-        frame = cv2.imread(dado["frame"], cv2.IMREAD_GRAYSCALE)
-        if frame is None:
-            frame = np.zeros((84, 84), dtype=np.uint8)
-        frame = np.expand_dims(frame, axis=-1)  # (84, 84, 1)
-
-        # 14 estados normalizados — espelha FNAFEnv._capturar_observacao().
-        # Datasets antigos sem os campos de estado usam valores neutros:
-        # energia=100 (cheio), tempo=0 (início), demais=0 (inativo). Divisores
-        # importados do env (fonte única) — se o env mudar, o BC acompanha.
-        estados = np.array([
-            float(dado.get("porta_esq", 0)),
-            float(dado.get("porta_dir", 0)),
-            float(dado.get("luz_esq", 0)),
-            float(dado.get("luz_dir", 0)),
-            float(dado.get("camera_aberta", 0)),
-            float(dado.get("camera_ativa", 0)) / 11.0,
-            float(dado.get("energia", 100)) / 100.0,
-            min(float(dado.get("tempo_ep", 0)) / 535.0, 1.0),
-            float(dado.get("ameaca_esq", 0)),
-            float(dado.get("ameaca_dir", 0)),
-            float(dado.get("noite", 1)) / MAX_NOITE,
-            min(float(dado.get("tempo_sem_camera", 0.0)) / FOXY_SATURACAO_S, 1.0),  # 12º
-            min(float(dado.get("idade_info_esq", 0.0)) / INFO_SATURACAO_S, 1.0),    # 13º (run 3)
-            min(float(dado.get("idade_info_dir", 0.0)) / INFO_SATURACAO_S, 1.0),    # 14º (run 3)
-        ], dtype=np.float32)
-
-        acao = int(dado["acao"])
-
         obs = {
-            "imagem": torch.ByteTensor(frame),
-            "estados": torch.FloatTensor(estados)
+            "imagem": torch.ByteTensor(_imagem_do_frame(dado)),
+            "estados": torch.FloatTensor(_estados_do_frame(dado)),
         }
-        return obs, torch.LongTensor([acao])[0]
+        return obs, torch.LongTensor([int(dado["acao"])])[0]
 
 
 def _split_estratificado(dataset: GameplayDataset, frac_val: float = 0.10, seed: int = 42):
@@ -283,6 +284,174 @@ def treinar_bc(caminhos_json: list[str], epochs: int = 200, lr: float = 1e-3,
     modelo.save(caminho_saida)
     print(f"Modelo BC salvo em: {caminho_saida}")
 
+    env.close()
+    return modelo
+
+
+def _carregar_episodios(caminhos_json: list[str]) -> list[dict]:
+    """Cada dataset.json é UM episódio (noite contínua). Devolve tensores por episódio,
+    preservando a ordem temporal (o BC recorrente precisa da sequência inteira)."""
+    episodios = []
+    for caminho in sorted(caminhos_json):
+        with open(caminho, "r") as f:
+            dados = json.load(f)
+        _reconstruir_idade_info(dados)   # datasets pré-run-3: reconstrói idade_info_esq/dir
+        episodios.append({
+            "imagem":  torch.from_numpy(np.stack([_imagem_do_frame(d) for d in dados])),   # (T,84,84,1) uint8
+            "estados": torch.from_numpy(np.stack([_estados_do_frame(d) for d in dados])),  # (T,14) float32
+            "acoes":   torch.from_numpy(np.array([int(d["acao"]) for d in dados], dtype=np.int64)),
+            "noite":   int(dados[0].get("noite", 1)),
+            "nome":    Path(caminho).parent.name,
+        })
+        print(f"Carregado: {caminho} ({len(dados)} frames, noite {episodios[-1]['noite']})")
+    return episodios
+
+
+def _pesos_classe(episodios: list[dict], cap_mult: float = 10.0) -> torch.Tensor:
+    """Peso 1/freq(classe) capado em cap_mult× a mediana — mesma ideia do WeightedRandomSampler
+    do BC feedforward, mas aplicada como PESO DA PERDA (não dá p/ reamostrar frames soltos sem
+    quebrar a sequência da LSTM)."""
+    cont = Counter()
+    for ep in episodios:
+        cont.update(ep["acoes"].tolist())
+    peso = {c: 1.0 / n for c, n in cont.items()}
+    cap = cap_mult * float(np.median(list(peso.values())))
+    vec = torch.ones(NUM_ACOES)
+    for c, w in peso.items():
+        vec[c] = min(w, cap)
+    return vec
+
+
+def _estado_lstm_zero(policy, device):
+    """Estado oculto zerado (h, c) do LSTM do ator, n_seq=1 — início de episódio."""
+    forma = (policy.lstm_actor.num_layers, 1, policy.lstm_actor.hidden_size)
+    return (torch.zeros(forma, device=device), torch.zeros(forma, device=device))
+
+
+def _chunks_episodio(ep: dict, chunk: int, device):
+    """Itera os chunks de BPTT truncado de um episódio. `starts` marca 1 no PRIMEIRO frame do
+    episódio (reset do estado oculto) e 0 no resto — a LSTM propaga a memória dentro do episódio."""
+    T = ep["acoes"].shape[0]
+    for ini in range(0, T, chunk):
+        fim = min(ini + chunk, T)
+        obs = {"imagem": ep["imagem"][ini:fim].to(device),
+               "estados": ep["estados"][ini:fim].to(device)}
+        starts = torch.zeros(fim - ini, device=device)
+        if ini == 0:
+            starts[0] = 1.0
+        yield obs, starts, ep["acoes"][ini:fim].to(device)
+
+
+@torch.no_grad()
+def _avaliar_recorrente(policy, ep: dict, device, chunk: int):
+    """(top-1, macro-recall, recall por classe) num episódio de validação, teacher-forced com
+    argmax determinístico e o estado oculto propagado como no jogo."""
+    h = _estado_lstm_zero(policy, device)
+    total, certo = Counter(), Counter()
+    for obs, starts, acoes in _chunks_episodio(ep, chunk, device):
+        dist, h = policy.get_distribution(obs, h, starts)
+        h = (h[0].detach(), h[1].detach())
+        pred = dist.distribution.probs.argmax(dim=1)
+        for a, p in zip(acoes.tolist(), pred.tolist()):
+            total[a] += 1
+            certo[a] += int(a == p)
+    recall = {c: certo[c] / n for c, n in total.items()}
+    top1 = sum(certo.values()) / max(sum(total.values()), 1)
+    macro = sum(recall.values()) / len(recall) if recall else 0.0
+    return top1, macro, recall
+
+
+def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float = 1e-3,
+                          paciencia: int = 15, chunk: int = 256):
+    """BC RECORRENTE (run 3): clona as demos como SEQUÊNCIAS numa política RecurrentPPO, com
+    teacher forcing e BPTT truncado. Diferente do BC feedforward (embaralha frames soltos → só o
+    extractor transfere pra LSTM), aqui a própria LSTM + cabeças são treinadas, então o warmstart
+    transfere ~100% pra run LSTM — mata o cold-start que deixou a run 3 aleatória (H~2.0 a 175k).
+
+    Estado oculto zera no início de cada episódio e propaga (detached) entre chunks de `chunk`
+    frames (BPTT truncado: mais janelas de gradiente, sem retropropagar ~1500 passos de uma vez).
+    Desbalanceamento (portas raras) via PERDA PONDERADA por classe."""
+    from sb3_contrib import RecurrentPPO
+
+    print("=== Behavioral Cloning RECORRENTE (LSTM) ===\n")
+    episodios = _carregar_episodios(caminhos_json)
+    if len(episodios) < 2:
+        raise SystemExit("BC recorrente precisa de >= 2 episódios (datasets). Grave mais noites.")
+
+    # Split POR EPISÓDIO (estratificar por classe quebraria a sequência): segura 1 episódio de
+    # validação da noite com MAIS gravações (removê-lo ainda deixa a noite no treino); empate →
+    # o de menos ações (menos custoso remover). Preserva a diversidade de noites no treino.
+    noites = Counter(ep["noite"] for ep in episodios)
+    noite_val = max(noites, key=lambda n: (noites[n], -n))
+    candidatos = [i for i, ep in enumerate(episodios) if ep["noite"] == noite_val]
+    idx_val = min(candidatos, key=lambda i: int((episodios[i]["acoes"] != 0).sum()))
+    val = episodios[idx_val]
+    treino = [ep for i, ep in enumerate(episodios) if i != idx_val]
+    print(f"\nSplit por episódio: {len(treino)} treino / 1 validação "
+          f"('{val['nome']}', noite {val['noite']})")
+
+    pesos = _pesos_classe(episodios)
+
+    print("\nCriando RecurrentPPO (LSTM hidden 128, 1 camada, critic_lstm) — mesma arquitetura da run...")
+    env = FNAFEnv()
+    policy_kwargs = dict(
+        features_extractor_class=MultimodalExtractor,
+        lstm_hidden_size=128, n_lstm_layers=1, enable_critic_lstm=True,
+    )
+    modelo = RecurrentPPO(
+        policy="MultiInputLstmPolicy", env=env,
+        policy_kwargs=policy_kwargs, verbose=0, device="auto",
+    )
+    policy = modelo.policy
+    device = modelo.device
+    pesos = pesos.to(device)
+    optimizer = optim.Adam(policy.parameters(), lr=lr)
+
+    print(f"\nTreinando até {epochs} épocas (chunk BPTT={chunk}; early stop: {paciencia} sem "
+          f"melhora no macro-recall da validação)...\n")
+    melhor_macro, melhor_estado, sem_melhora = -1.0, None, 0
+
+    for epoch in range(epochs):
+        random.shuffle(treino)
+        perda_epoca, n_chunks = 0.0, 0
+        for ep in treino:
+            h = _estado_lstm_zero(policy, device)
+            for obs, starts, acoes in _chunks_episodio(ep, chunk, device):
+                dist, h = policy.get_distribution(obs, h, starts)
+                log_probs = dist.log_prob(acoes)
+                w = pesos[acoes]
+                perda = -(w * log_probs).sum() / w.sum().clamp_min(1e-8)  # NLL ponderada
+                optimizer.zero_grad()
+                perda.backward()
+                optimizer.step()
+                h = (h[0].detach(), h[1].detach())   # BPTT truncado: não retropropaga p/ o chunk anterior
+                perda_epoca += perda.item()
+                n_chunks += 1
+
+        top1_val, macro_val, recall = _avaliar_recorrente(policy, val, device, chunk)
+        print(f"Época {epoch+1:3d}/{epochs} | Loss: {perda_epoca/max(n_chunks,1):.4f} | "
+              f"Val top-1: {top1_val*100:.1f}% | Val macro-recall: {macro_val*100:.1f}%")
+
+        if macro_val > melhor_macro:
+            melhor_macro = macro_val
+            melhor_estado = {k: v.detach().cpu().clone() for k, v in policy.state_dict().items()}
+            sem_melhora = 0
+            print("  Recall por classe (validação):")
+            for c in sorted(recall):
+                print(f"    {ACOES.get(c, c):<20} {recall[c]*100:5.1f}%")
+        else:
+            sem_melhora += 1
+            if sem_melhora >= paciencia:
+                print(f"\nEarly stop: {paciencia} épocas sem melhora no macro-recall.")
+                break
+
+    if melhor_estado is not None:
+        policy.load_state_dict(melhor_estado)
+    print(f"\nMelhor macro-recall (validação): {melhor_macro*100:.1f}%")
+
+    caminho_saida = "modelos/fnaf_bc.zip"
+    modelo.save(caminho_saida)
+    print(f"Modelo BC (recorrente) salvo em: {caminho_saida}")
     env.close()
     return modelo
 

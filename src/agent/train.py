@@ -73,9 +73,11 @@ def _carregar_env(caminho: str = ".env") -> None:
 
 _carregar_env()
 
-# Decisão 7 — ligar a LSTM (RecurrentPPO) via FNAF_USAR_LSTM=1 no .env. Padrão 0 = feedforward
-# (PPO), que é o CONTROLE do A/B. Trocar SÓ isso entre o controle e a LSTM.
-USAR_LSTM = os.getenv("FNAF_USAR_LSTM", "0").strip() == "1"
+# Algoritmo da fase (Decisão 7): True = RecurrentPPO (LSTM, run 3), False = PPO feedforward
+# (controle do A/B). Constante de CÓDIGO, não .env — não varia por dispositivo, e o git leva a
+# escolha igual pros 2 PCs (evita o drift de .env que já fez prod rodar feedforward sem querer).
+# Trocar aqui p/ alternar. jogar/avaliar e o BC leem esta MESMA constante (importam de train).
+USAR_LSTM = True
 
 def _env_int(nome: str, padrao: int) -> int:
     try:
@@ -137,8 +139,24 @@ ENT_PASSO_MAX = _env_float("FNAF_ENT_PASSO_MAX", 0.20)  # passo máx por rollout
 # WARMUP_FRAC do treino: clip_range minúsculo (ator quase parado; o value_loss NÃO passa pelo
 # clip e treina normal) + ent_coef preso em ENT_MIN (o bônus de entropia também não passa pelo
 # clip — seria o único termo capaz de randomizar o BC). 0 = desligado.
-WARMUP_FRAC = _env_float("FNAF_WARMUP_FRAC", 0.0)
-WARMUP_CLIP = _env_float("FNAF_WARMUP_CLIP", 0.03)
+# Warmup do crítico (BC→PPO) — constantes de código. Com o BC RECORRENTE o ator+LSTM são
+# clonados mas o CRÍTICO (value_net + critic_lstm) chega aleatório: o warmup congela o ator nos
+# primeiros WARMUP_FRAC do treino fresco com --bc enquanto o crítico aprende V. Self-gated (só
+# age em treino fresco COM --bc; em retomada a janela já passou).
+WARMUP_FRAC = 0.08
+WARMUP_CLIP = 0.03
+
+# Âncora BC (regularizador): usa as demos DURANTE o RL — não só como init (que o RL erode). A
+# cada rollout roda ANCORA_BC_PASSOS episódios de BC recorrente (teacher-forced) sobre as demos,
+# com peso decaindo linear (forte no início → 0 no fim), num Adam DEDICADO. Segura os hábitos do
+# humano (frugalidade de energia na Fase 1; checagem de câmera na Fase 2) enquanto o RL explora.
+# Constantes de CÓDIGO (não variam por dispositivo → fora do .env; flipar aqui e o git leva pros
+# 2 PCs, sem drift). Default OFF (gated): ligar sob evidência (energia seguir dominante / hábito
+# se perdendo). Só tem efeito com RecurrentPPO (usa a get_distribution recorrente).
+ANCORA_BC        = False   # True liga a âncora
+ANCORA_BC_PESO   = 1.0     # escala inicial da perda de âncora (decai até 0 no fim)
+ANCORA_BC_PASSOS = 1       # episódios de BC por rollout
+ANCORA_BC_LR     = 1e-4    # lr do Adam dedicado da âncora
 
 # Currículo automático: promove a noite-alvo quando a janela CHEIA da noite alvo cruza o limiar.
 CURRICULO_LIMIAR = _env_float("FNAF_CURRICULO_LIMIAR", 0.50)
@@ -537,6 +555,79 @@ class CurriculumCallback(BaseCallback):
         self.logger.record("custom/curriculo/noite_alvo", float(self.alvo))
 
 
+class AncoraBC(BaseCallback):
+    """Âncora BC: mantém as demos ATIVAS durante o RL (não só como init, que o RL erode). A cada
+    rollout roda ANCORA_BC_PASSOS episódios de BC recorrente (teacher-forced, BPTT truncado)
+    sobre as demos, num Adam DEDICADO, com peso decaindo linear (forte no início → 0 no fim).
+    É um REGULARIZADOR que segura os hábitos do humano (frugalidade de energia; depois, checagem
+    de câmera) enquanto o RL explora — sem fixar o ótimo (o peso zera no fim).
+
+    Só faz sentido com RecurrentPPO (usa get_distribution recorrente). Reusa os helpers do BC
+    recorrente (fonte única da montagem de sequência/perda). Roda em _on_rollout_end, ANTES do
+    train() do PPO no mesmo ciclo — nudge de âncora, depois a atualização on-policy."""
+
+    def __init__(self, caminhos_demos: list[str], peso_inicial: float = ANCORA_BC_PESO,
+                 passos: int = ANCORA_BC_PASSOS, lr: float = ANCORA_BC_LR):
+        super().__init__()
+        self.caminhos = caminhos_demos
+        self.peso_inicial = peso_inicial
+        self.passos = passos
+        self.lr = lr
+        self.ativa = False
+        self.episodios = None
+        self.pesos_classe = None
+        self.optimizer = None
+
+    def _on_training_start(self) -> None:
+        if not isinstance(self.model, RecurrentPPO):
+            print("[ancora_bc] AVISO: âncora só suportada com RecurrentPPO (LSTM) — DESLIGADA "
+                  "neste run feedforward.")
+            return
+        import torch.optim as optim
+        from src.agent.behavioral_cloning import _carregar_episodios, _pesos_classe
+        if not self.caminhos:
+            print("[ancora_bc] AVISO: nenhum dataset em dados/*/dataset.json — âncora DESLIGADA.")
+            return
+        self.episodios = _carregar_episodios(self.caminhos)
+        self.pesos_classe = _pesos_classe(self.episodios).to(self.model.device)
+        self.optimizer = optim.Adam(self.model.policy.parameters(), lr=self.lr)
+        self.ativa = True
+        print(f"[ancora_bc] ATIVA: {len(self.episodios)} demos, peso inicial {self.peso_inicial}, "
+              f"{self.passos} episódio(s)/rollout, lr {self.lr} — peso decai linear até 0.")
+
+    def _on_step(self) -> bool:
+        return True
+
+    def _on_rollout_end(self) -> None:
+        if not self.ativa:
+            return
+        import random as _random
+        from src.agent.behavioral_cloning import _chunks_episodio, _estado_lstm_zero
+        # Peso decai com o progresso RESTANTE (1.0 → 0.0): forte no início, some no fim (não fixa
+        # o ótimo — o RL fica livre pra divergir do humano quando já aprendeu).
+        peso = self.peso_inicial * max(self.model._current_progress_remaining, 0.0)
+        self.logger.record("custom/ancora_bc/peso", peso)
+        if peso <= 1e-6:
+            self.logger.record("custom/ancora_bc/loss", 0.0)
+            return
+        policy, device = self.model.policy, self.model.device
+        perda_total, n = 0.0, 0
+        for _ in range(self.passos):
+            ep = _random.choice(self.episodios)
+            h = _estado_lstm_zero(policy, device)
+            for obs, starts, acoes in _chunks_episodio(ep, 256, device):
+                dist, h = policy.get_distribution(obs, h, starts)
+                w = self.pesos_classe[acoes]
+                perda = peso * (-(w * dist.log_prob(acoes)).sum() / w.sum().clamp_min(1e-8))
+                self.optimizer.zero_grad()
+                perda.backward()
+                self.optimizer.step()
+                h = (h[0].detach(), h[1].detach())   # BPTT truncado
+                perda_total += perda.item()
+                n += 1
+        self.logger.record("custom/ancora_bc/loss", perda_total / max(n, 1))
+
+
 class CheckpointComLog(CheckpointCallback):
     """CheckpointCallback que ANUNCIA cada checkpoint no terminal com o contexto do treino
     (lido do LogCallback). Serve pra decidir até onde é seguro voltar: mostra o arquivo salvo,
@@ -578,15 +669,15 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     # telemetria morte_anim_com_flag ≈ 0 (morre CEGO). Run 3 = RecurrentPPO + estados 13-14.
     if USAR_LSTM:
         print("=" * 70)
-        print("FNAF_USAR_LSTM=1 -> RecurrentPPO (LSTM, hidden 128, 1 camada, critic_lstm).")
-        print("Fase run 3 (14/07/2026): LSTM + estados de idade da informacao (13-14).")
+        print("USAR_LSTM=True (codigo) -> RecurrentPPO (LSTM, hidden 128, 1 camada, critic_lstm).")
+        print("Fase run 3: LSTM + estados de idade da informacao (13-14) + BC recorrente.")
         print("Pre-voo obrigatorio: python -m src.utils.testar_masking (offline).")
-        print("Com --bc a transferencia e PARCIAL (so o extractor) — comeco mais lento que")
-        print("o feedforward era esperado; regua de metas no PACOTE_BC_ENTROPIA.md.")
+        print("Com --bc RECORRENTE a transferencia e ~100% (ator+LSTM+cabecas); so o critico")
+        print("chega frio (por isso o warmup). Regua de metas no PACOTE_BC_ENTROPIA.md.")
         print("=" * 70)
     else:
-        print("[fase] FNAF_USAR_LSTM=0 (feedforward) — a run 3 (14/07/2026+) usa LSTM=1;"
-              " confirme o .env desta maquina.")
+        print("[fase] USAR_LSTM=False (feedforward) — a run 3 usa LSTM;"
+              " troque a constante USAR_LSTM em train.py se for intencional.")
     time.sleep(3)
 
     env_base = DummyVecEnv([lambda: FNAFEnv()])
@@ -661,7 +752,9 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
           f"ent_coef inicial {ENT_INICIO} | "
           f"controlador: H {H_INICIO}->{H_FIM} nats, ent [{ENT_MIN}, {ENT_MAX}], ganho {ENT_GANHO}"
           + (f" | warmup do crítico: {WARMUP_FRAC*100:.0f}% do treino (clip {WARMUP_CLIP})"
-             if WARMUP_FRAC > 0 else ""))
+             if WARMUP_FRAC > 0 else "")
+          + (f" | âncora BC: peso {ANCORA_BC_PESO}→0, {ANCORA_BC_PASSOS} ep/rollout, lr {ANCORA_BC_LR}"
+             if ANCORA_BC else ""))
     if WARMUP_FRAC > 0 and not (bc_path and carregar_modelo is None):
         print("[warmup] AVISO: FNAF_WARMUP_FRAC > 0 faz sentido em treino FRESCO com --bc "
               "(ator clonado + crítico frio). Sem BC, só atrasa o início; em retomada, a janela "
@@ -680,12 +773,16 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     entropia = ControladorEntropia()     # termostato: ent_coef em malha fechada sobre a H medida
     metricas_noite = MetricasPorNoite()  # quebra win_rate/sobrevivência/causas por noite
     curriculum = CurriculumCallback(metricas_noite)  # DEPOIS de metricas_noite: lê as janelas dele
+    callbacks = [log_callback, checkpoint, entropia, metricas_noite, curriculum]
+    if ANCORA_BC:
+        import glob as _glob
+        callbacks.append(AncoraBC(sorted(_glob.glob("dados/*/dataset.json"))))
 
     print(f"Treinando por {timesteps:,} timesteps...\n")
     try:
         modelo.learn(
             total_timesteps=timesteps,
-            callback=[log_callback, checkpoint, entropia, metricas_noite, curriculum],
+            callback=callbacks,
             reset_num_timesteps=carregar_modelo is None,
         )
     except KeyboardInterrupt:

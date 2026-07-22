@@ -160,6 +160,30 @@ ele não vem sozinho:
 
 **BC = ponto de partida · termostato = busca viva · currículo = noites certas na hora certa.**
 
+> **Atualização (run 3, 22/07/2026) — BC recorrente + âncora + re-sequência energia-primeiro:**
+> A run 3 (LSTM) travou num cold-start: o BC feedforward só transferia o extractor pra
+> RecurrentPPO (heads+LSTM nasciam aleatórias), e a política ficou quase-uniforme (H≈2,07 a
+> 175k, N1 ~5%). Duas mudanças:
+> - **BC recorrente** (`treinar_bc_recorrente` em `behavioral_cloning.py`): clona as demos como
+>   SEQUÊNCIAS (1 dataset = 1 episódio) numa política RecurrentPPO, teacher-forced com BPTT
+>   truncado (chunks de 256, estado oculto propagado/detachado, resetado no início) e perda NLL
+>   ponderada por classe. Agora a LSTM+heads transferem **100%** (`transferidos 50/50`). O
+>   `main.py bc` roteia por `FNAF_USAR_LSTM` (=1 recorrente, =0 feedforward).
+> - **Âncora BC** (`AncoraBC` em `train.py`; constante de código `ANCORA_BC`, default OFF/gated):
+>   usa as demos DURANTE o RL (não só init, que o RL erode) — passos de BC recorrente por rollout
+>   com peso decaindo linear até 0, num Adam dedicado. Regularizador que segura os hábitos do
+>   humano enquanto o RL explora; não fixa o ótimo (peso→0). Ligar sob evidência (editar a
+>   constante — não é `.env`: não varia por dispositivo, e o git leva a mudança pros 2 PCs).
+>
+> **Re-sequência (steer do usuário):** o gargalo IMEDIATO é ENERGIA na Noite 1 (a run LSTM tinha
+> 256/305 mortes por energia na N1, energia final mediana 0% — apaga a ~88% da noite). O agente
+> "nem aprende a otimizar energia antes de chegar nos animatrônicos". Foxy (CAM 1C) e Freddy NÃO
+> estão na observação (só Bonnie/Chica têm flag — por isso `morte_anim_com_flag≈0` é confundido:
+> mortes por Foxy/Freddy nunca têm flag), mas isso é gargalo de NOITE 2-3 → **Fase 2**. A Fase 2
+> aprenderá a câmera pela EXPERIÊNCIA (LSTM + frame stacking + resolução maior), não por template
+> (a estática do FNAF quebra template-match); templates de Foxy/Freddy = último recurso. Plano
+> completo e gatilhos: `.claude/plans` (run 3 — energia primeiro).
+
 **O gravador tinha 4 defeitos que sabotariam o BC** (corrigidos antes de qualquer gravação):
 
 | Defeito | Consequência se gravasse antes | Correção |

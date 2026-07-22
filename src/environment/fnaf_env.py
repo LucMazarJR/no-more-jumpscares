@@ -547,6 +547,39 @@ class FNAFEnv(gym.Env):
         print("[FALLBACK] Jogo recolocado em modo janela (ALT+ENTER).")
         return True
 
+    def _garantir_janela(self, tentativas: int = 3) -> bool:
+        """Garante a janela do jogo em foco, reabrindo o executavel se sumiu. Retorna False
+        so depois de esgotar as tentativas — o chamador decide se aborta ou segue."""
+        for i in range(tentativas):
+            if not self._janela_do_jogo_aberta():
+                self._abrir_jogo_fallback()   # ja espera REABRIR_ESPERA_SEGUNDOS
+            if self.capture.focar_janela(WINDOW_TITLE):
+                return True
+            print(f"[RESET] Janela do jogo ausente — nova tentativa de reabrir "
+                  f"({i + 1}/{tentativas})...")
+        return False
+
+    def _capturar_observacao_resiliente(self, tentativas: int = 3) -> dict:
+        """Captura a observacao final do reset tolerando a janela sumir na transicao (o jogo
+        crashou/fechou entre o clique de menu e a captura — Golden Freddy, update do Windows,
+        etc.). Diferente do step (que pode encerrar o episodio como MORTE), o reset PRECISA
+        devolver uma observacao valida — entao reabre + repete; so se TUDO falhar devolve uma
+        observacao ZERO (shape valido) p/ o treino SOBREVIVER e o proximo step seguir tentando,
+        em vez de matar o processo inteiro (o que parava o treino a cada madrugada)."""
+        for i in range(tentativas):
+            try:
+                return self._capturar_observacao()
+            except Exception as erro:
+                print(f"[RESET] Falha ao capturar a observacao ({erro}). Reabrindo o jogo "
+                      f"({i + 1}/{tentativas})...")
+                self._abrir_jogo_fallback()
+        print("[RESET] Captura ainda falhando — devolvendo observacao ZERO; o proximo step "
+              "seguira tentando recuperar em vez de derrubar o treino.")
+        return {
+            "imagem": np.zeros((ALTURA, LARGURA, 1), dtype=np.uint8),
+            "estados": np.zeros(self.observation_space["estados"].shape, dtype=np.float32),
+        }
+
     def _interromper_episodio(self, motivo: str, como_morte: bool = False):
         """Encerra o episódio quando o jogo some no meio da noite e tenta reabri-lo. Ambos os
         casos levam RECOMPENSA_MORTE (derrota — não premia ficar travado na tela inicial):
@@ -662,12 +695,10 @@ class FNAFEnv(gym.Env):
         self._vazio_dir               = 0
         self._presenca_esq            = 0
 
-        if not self._janela_do_jogo_aberta():
-            self._abrir_jogo_fallback()
-
-        if not self.capture.focar_janela(WINDOW_TITLE):
+        # Garante a janela ANTES de clicar no menu, reabrindo o jogo se ele fechou na transicao.
+        if not self._garantir_janela():
             raise RuntimeError(
-                "Janela do jogo nao encontrada. "
+                "Janela do jogo nao encontrada apos varias tentativas de reabrir. "
                 "Configure FNAF_EXECUTABLE_PATH no .env para fallback automatico."
             )
         time.sleep(0.5)
@@ -692,7 +723,7 @@ class FNAFEnv(gym.Env):
         self._t_confirmacao_dir = self.episode_start_time
 
         print("Reset completo — noite iniciada!")
-        observacao = self._capturar_observacao()
+        observacao = self._capturar_observacao_resiliente()
         return observacao, {}
 
     def step(self, acao: int):

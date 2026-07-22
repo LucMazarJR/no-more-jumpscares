@@ -80,8 +80,13 @@ def modo_bc():
     (src/utils/gravar_gameplay.py). Gera modelos/fnaf_bc.zip para warmstart do treino.
     NÃO precisa do jogo aberto (lê frames já gravados).
     Uso: python main.py bc [dataset.json ...]
-         Sem argumentos, pega automaticamente TODOS os dados/*/dataset.json."""
-    from src.agent.behavioral_cloning import treinar_bc
+         Sem argumentos, pega automaticamente TODOS os dados/*/dataset.json.
+
+    O ALGORITMO segue a constante USAR_LSTM (de train.py, igual ao treino): True usa BC RECORRENTE
+    (clona a própria LSTM+cabeças, transfere ~100%); False usa BC feedforward (só o extractor pra
+    LSTM). O BC precisa CASAR com a run — senão o warmstart volta a semear só a percepção."""
+    from src.agent.behavioral_cloning import treinar_bc, treinar_bc_recorrente
+    from src.agent.train import USAR_LSTM as usar_lstm
 
     caminhos = [a for a in sys.argv[2:] if not a.startswith("--")]
     if not caminhos:
@@ -97,7 +102,13 @@ def modo_bc():
         print("Sem argumentos, pega automaticamente todos os dados/*/dataset.json.")
         print("Grave demos antes com: python -m src.utils.gravar_gameplay --noite N")
         return
-    treinar_bc(caminhos)
+
+    if usar_lstm:
+        print("[BC] USAR_LSTM=True -> BC RECORRENTE (clona a LSTM+cabeças da run 3).")
+        treinar_bc_recorrente(caminhos)
+    else:
+        print("[BC] USAR_LSTM=False -> BC feedforward (transfere só o extractor pra LSTM).")
+        treinar_bc(caminhos)
 
 
 def modo_jogar():
@@ -122,8 +133,8 @@ def modo_jogar():
         print("Nenhum modelo encontrado em modelos/. Treine primeiro: python main.py treino")
         return
 
-    # Decisão 7: FNAF_USAR_LSTM=1 carrega RecurrentPPO e propaga o estado da LSTM (igual ao treino).
-    usar_lstm = os.getenv("FNAF_USAR_LSTM", "0").strip() == "1"
+    # Decisão 7: USAR_LSTM=True carrega RecurrentPPO e propaga o estado da LSTM (igual ao treino).
+    from src.agent.train import USAR_LSTM as usar_lstm
     print(f"Carregando modelo ({'LSTM' if usar_lstm else 'PPO'}): {caminho}")
     if ablacao:
         print(f">>> ABLAÇÃO (Decisão 5): ramo '{ablacao}' ZERADO na observação <<<")
