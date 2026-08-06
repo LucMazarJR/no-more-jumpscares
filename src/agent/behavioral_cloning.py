@@ -307,14 +307,29 @@ def _carregar_episodios(caminhos_json: list[str]) -> list[dict]:
     return episodios
 
 
-def _pesos_classe(episodios: list[dict], cap_mult: float = 10.0) -> torch.Tensor:
-    """Peso 1/freq(classe) capado em cap_mult× a mediana — mesma ideia do WeightedRandomSampler
-    do BC feedforward, mas aplicada como PESO DA PERDA (não dá p/ reamostrar frames soltos sem
-    quebrar a sequência da LSTM)."""
+def _pesos_classe(episodios: list[dict], cap_mult: float = 10.0,
+                  modo: str = "sqrt") -> torch.Tensor:
+    """Peso por classe da perda do BC (não dá p/ reamostrar frames soltos sem quebrar a sequência
+    da LSTM, então o balanceamento vira peso na perda), capado em cap_mult× a mediana.
+
+    `modo` controla a AGRESSIVIDADE — e isso é um trade-off real descoberto na auditoria:
+      • "inv"  = 1/freq: equilibra as classes ao máximo, mas empurra a política pra DISTRIBUIÇÃO
+        UNIFORME (entropia → ln17 = 2.83). Foi o que produziu clones indecisos (H≈2.4-2.8),
+        inúteis como warmstart — o RL SORTEIA a ação, então H alto = agente quase aleatório.
+      • "sqrt" = 1/sqrt(freq) (DEFAULT): ainda tira as ações raras do fundo do poço, mas mantém
+        o clone perto da distribuição REAL do humano — que é o objetivo de um warmstart (imitar),
+        não o de um classificador balanceado (maximizar macro-recall).
+      • "nenhum" = máxima verossimilhança pura: fidelidade máxima ao humano, mas o oceano de
+        "nada" (86% dos frames) pode afogar portas/câmeras.
+    Se o clone não passar no aceite por H alto, use um modo mais brando; se não passar por macro
+    baixo, use um mais agressivo."""
     cont = Counter()
     for ep in episodios:
         cont.update(ep["acoes"].tolist())
-    peso = {c: 1.0 / n for c, n in cont.items()}
+    if modo == "nenhum":
+        return torch.ones(NUM_ACOES)
+    expoente = 1.0 if modo == "inv" else 0.5
+    peso = {c: 1.0 / (n ** expoente) for c, n in cont.items()}
     cap = cap_mult * float(np.median(list(peso.values())))
     vec = torch.ones(NUM_ACOES)
     for c, w in peso.items():
@@ -344,25 +359,48 @@ def _chunks_episodio(ep: dict, chunk: int, device):
 
 @torch.no_grad()
 def _avaliar_recorrente(policy, ep: dict, device, chunk: int):
-    """(top-1, macro-recall, recall por classe) num episódio de validação, teacher-forced com
-    argmax determinístico e o estado oculto propagado como no jogo."""
+    """(top-1, macro-recall, entropia, recall por classe) num episódio de validação,
+    teacher-forced com argmax determinístico e o estado oculto propagado como no jogo.
+
+    A ENTROPIA média da política é medida junto porque o RL SORTEIA a ação (não usa argmax):
+    um clone com top-1 alto mas H≈2.8 (uniforme) sorteia errado quase sempre e não serve de
+    warmstart. É o número que denuncia um clone inútil antes de gastar dias de treino."""
     h = _estado_lstm_zero(policy, device)
     total, certo = Counter(), Counter()
+    soma_h, n_h = 0.0, 0
     for obs, starts, acoes in _chunks_episodio(ep, chunk, device):
         dist, h = policy.get_distribution(obs, h, starts)
         h = (h[0].detach(), h[1].detach())
-        pred = dist.distribution.probs.argmax(dim=1)
+        probs = dist.distribution.probs
+        soma_h += float((-(probs * torch.log(probs.clamp_min(1e-9))).sum(dim=1)).sum())
+        n_h += probs.shape[0]
+        pred = probs.argmax(dim=1)
         for a, p in zip(acoes.tolist(), pred.tolist()):
             total[a] += 1
             certo[a] += int(a == p)
     recall = {c: certo[c] / n for c, n in total.items()}
     top1 = sum(certo.values()) / max(sum(total.values()), 1)
     macro = sum(recall.values()) / len(recall) if recall else 0.0
-    return top1, macro, recall
+    entropia = soma_h / max(n_h, 1)
+    return top1, macro, entropia, recall
+
+
+def _score_clone(top1: float, macro: float) -> float:
+    """Média harmônica de top-1 e macro-recall — o critério de seleção do checkpoint.
+
+    Selecionar por macro-recall PURO (como fazíamos) escolhe modelos DEGENERADOS: quem spamma
+    uma classe rara ganha 100% de recall nela e 0 no resto, pontuando mais que um modelo
+    equilibrado. Foi exatamente o que aconteceu (clone salvo com macro 12.8% mas top-1 2.8%,
+    argmax preso em luz_direita; baseline 'sempre nada' = 86.5%). A harmônica exige os DOIS:
+    imitar o humano na maioria dos frames E não ignorar as ações raras."""
+    if top1 <= 0.0 or macro <= 0.0:
+        return 0.0
+    return 2.0 * top1 * macro / (top1 + macro)
 
 
 def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float = 1e-3,
-                          paciencia: int = 15, chunk: int = 256):
+                          paciencia: int = 15, chunk: int = 256, restarts: int = 4,
+                          modo_pesos: str = "sqrt"):
     """BC RECORRENTE (run 3): clona as demos como SEQUÊNCIAS numa política RecurrentPPO, com
     teacher forcing e BPTT truncado. Diferente do BC feedforward (embaralha frames soltos → só o
     extractor transfere pra LSTM), aqui a própria LSTM + cabeças são treinadas, então o warmstart
@@ -370,7 +408,12 @@ def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float
 
     Estado oculto zera no início de cada episódio e propaga (detached) entre chunks de `chunk`
     frames (BPTT truncado: mais janelas de gradiente, sem retropropagar ~1500 passos de uma vez).
-    Desbalanceamento (portas raras) via PERDA PONDERADA por classe."""
+    Desbalanceamento (portas raras) via PERDA PONDERADA por classe.
+
+    `restarts`: com POUCAS sequências (~5 episódios), o resultado depende muito da inicialização
+    aleatória (uma init ruim estagna a perda ~2.3 em vez de ~1.7 → clone de 13% em vez de 37%).
+    Treina `restarts` vezes com inits independentes e FICA COM O MELHOR macro-recall — troca a
+    loteria por um clone confiável. É offline/barato; suba se a variância ainda incomodar."""
     from sb3_contrib import RecurrentPPO
 
     print("=== Behavioral Cloning RECORRENTE (LSTM) ===\n")
@@ -390,7 +433,9 @@ def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float
     print(f"\nSplit por episódio: {len(treino)} treino / 1 validação "
           f"('{val['nome']}', noite {val['noite']})")
 
-    pesos = _pesos_classe(episodios)
+    pesos_cpu = _pesos_classe(episodios, modo=modo_pesos)
+    print(f"Balanceamento de classes: modo '{modo_pesos}' "
+          f"(sqrt = equilibra sem empurrar o clone pra uniforme)")
 
     print("\nCriando RecurrentPPO (LSTM hidden 128, 1 camada, critic_lstm) — mesma arquitetura da run...")
     env = FNAFEnv()
@@ -398,62 +443,91 @@ def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float
         features_extractor_class=MultimodalExtractor,
         lstm_hidden_size=128, n_lstm_layers=1, enable_critic_lstm=True,
     )
-    modelo = RecurrentPPO(
-        policy="MultiInputLstmPolicy", env=env,
-        policy_kwargs=policy_kwargs, verbose=0, device="auto",
-    )
-    policy = modelo.policy
-    device = modelo.device
-    pesos = pesos.to(device)
-    optimizer = optim.Adam(policy.parameters(), lr=lr)
 
-    print(f"\nTreinando até {epochs} épocas (chunk BPTT={chunk}; early stop: {paciencia} sem "
-          f"melhora no macro-recall da validação)...\n")
-    melhor_macro, melhor_estado, sem_melhora = -1.0, None, 0
+    def _treinar_uma_vez():
+        """Uma inicialização completa (fresh model). Retorna (melhor_macro, melhor_estado_cpu,
+        modelo). O modelo volta com os pesos do MELHOR epoch já carregados."""
+        modelo = RecurrentPPO("MultiInputLstmPolicy", env=env,
+                              policy_kwargs=policy_kwargs, verbose=0, device="auto")
+        policy, device = modelo.policy, modelo.device
+        pesos = pesos_cpu.to(device)
+        optimizer = optim.Adam(policy.parameters(), lr=lr)
+        melhor_score, melhor_info, melhor_estado, sem_melhora = -1.0, None, None, 0
+        for epoch in range(epochs):
+            random.shuffle(treino)
+            perda_epoca, n_chunks = 0.0, 0
+            for ep in treino:
+                h = _estado_lstm_zero(policy, device)
+                for obs, starts, acoes in _chunks_episodio(ep, chunk, device):
+                    dist, h = policy.get_distribution(obs, h, starts)
+                    w = pesos[acoes]
+                    perda = -(w * dist.log_prob(acoes)).sum() / w.sum().clamp_min(1e-8)  # NLL ponderada
+                    optimizer.zero_grad()
+                    perda.backward()
+                    optimizer.step()
+                    h = (h[0].detach(), h[1].detach())   # BPTT truncado
+                    perda_epoca += perda.item()
+                    n_chunks += 1
 
-    for epoch in range(epochs):
-        random.shuffle(treino)
-        perda_epoca, n_chunks = 0.0, 0
-        for ep in treino:
-            h = _estado_lstm_zero(policy, device)
-            for obs, starts, acoes in _chunks_episodio(ep, chunk, device):
-                dist, h = policy.get_distribution(obs, h, starts)
-                log_probs = dist.log_prob(acoes)
-                w = pesos[acoes]
-                perda = -(w * log_probs).sum() / w.sum().clamp_min(1e-8)  # NLL ponderada
-                optimizer.zero_grad()
-                perda.backward()
-                optimizer.step()
-                h = (h[0].detach(), h[1].detach())   # BPTT truncado: não retropropaga p/ o chunk anterior
-                perda_epoca += perda.item()
-                n_chunks += 1
+            top1_val, macro_val, h_val, recall = _avaliar_recorrente(policy, val, device, chunk)
+            score = _score_clone(top1_val, macro_val)
+            print(f"Época {epoch+1:3d}/{epochs} | Loss: {perda_epoca/max(n_chunks,1):.4f} | "
+                  f"top-1: {top1_val*100:.1f}% | macro: {macro_val*100:.1f}% | "
+                  f"H: {h_val:.2f} | score: {score*100:.1f}")
+            if score > melhor_score:
+                melhor_score = score
+                melhor_info = (top1_val, macro_val, h_val)
+                melhor_estado = {k: v.detach().cpu().clone() for k, v in policy.state_dict().items()}
+                sem_melhora = 0
+                print("  Recall por classe (validação):")
+                for c in sorted(recall):
+                    print(f"    {ACOES.get(c, c):<20} {recall[c]*100:5.1f}%")
+            else:
+                sem_melhora += 1
+                if sem_melhora >= paciencia:
+                    print(f"\nEarly stop: {paciencia} épocas sem melhora no score.")
+                    break
+        if melhor_estado is not None:
+            policy.load_state_dict(melhor_estado)
+        return melhor_score, melhor_info, modelo
 
-        top1_val, macro_val, recall = _avaliar_recorrente(policy, val, device, chunk)
-        print(f"Época {epoch+1:3d}/{epochs} | Loss: {perda_epoca/max(n_chunks,1):.4f} | "
-              f"Val top-1: {top1_val*100:.1f}% | Val macro-recall: {macro_val*100:.1f}%")
+    melhor_global, melhor_info, melhor_modelo = -1.0, None, None
+    for r in range(restarts):
+        print(f"\n===== Restart {r + 1}/{restarts} (init independente) =====")
+        score, info, modelo = _treinar_uma_vez()
+        top1, macro, h_clone = info if info else (0.0, 0.0, float("nan"))
+        print(f"[restart {r + 1}] score {score*100:.1f} (top-1 {top1*100:.1f}% | "
+              f"macro {macro*100:.1f}% | H {h_clone:.2f})")
+        if score > melhor_global:
+            melhor_global, melhor_info, melhor_modelo = score, info, modelo
 
-        if macro_val > melhor_macro:
-            melhor_macro = macro_val
-            melhor_estado = {k: v.detach().cpu().clone() for k, v in policy.state_dict().items()}
-            sem_melhora = 0
-            print("  Recall por classe (validação):")
-            for c in sorted(recall):
-                print(f"    {ACOES.get(c, c):<20} {recall[c]*100:5.1f}%")
-        else:
-            sem_melhora += 1
-            if sem_melhora >= paciencia:
-                print(f"\nEarly stop: {paciencia} épocas sem melhora no macro-recall.")
-                break
+    top1, macro, h_clone = melhor_info
+    print(f"\n>>> MELHOR de {restarts} restarts: score {melhor_global*100:.1f} "
+          f"(top-1 {top1*100:.1f}% | macro {macro*100:.1f}% | H {h_clone:.2f})")
 
-    if melhor_estado is not None:
-        policy.load_state_dict(melhor_estado)
-    print(f"\nMelhor macro-recall (validação): {melhor_macro*100:.1f}%")
+    # Aceite do clone (auditoria 08/2026): o warmstart só vale se o clone IMITA (top-1) e é
+    # CONFIANTE (H baixo — o RL sorteia a ação, não usa argmax). Um clone com H≈2.8 injeta uma
+    # política quase uniforme e reproduz o cold-start que travou a run 3.
+    problemas = []
+    if top1 < 0.70:
+        problemas.append(f"top-1 {top1*100:.1f}% < 70% (não imita o humano)")
+    if h_clone > 1.3:
+        problemas.append(f"H {h_clone:.2f} > 1.3 (clone indeciso — warmstart fraco)")
+    if macro < 0.25:
+        problemas.append(f"macro {macro*100:.1f}% < 25% (ignora ações raras: portas/câmeras)")
+    if problemas:
+        print("[AVISO] Clone ABAIXO do aceite — NÃO use pra treinar ainda:")
+        for p in problemas:
+            print(f"   - {p}")
+        print("   Ações: gravar mais demos de NOITE 1 (frugalidade de energia) ou subir 'restarts'.")
+    else:
+        print("[OK] Clone dentro do aceite (top-1 >= 70%, H <= 1.3, macro >= 25%).")
 
     caminho_saida = "modelos/fnaf_bc.zip"
-    modelo.save(caminho_saida)
+    melhor_modelo.save(caminho_saida)
     print(f"Modelo BC (recorrente) salvo em: {caminho_saida}")
     env.close()
-    return modelo
+    return melhor_modelo
 
 
 def transferir_pesos(modelo_rl, caminho_origem: str = "modelos/fnaf_bc.zip") -> None:

@@ -161,6 +161,15 @@ ANCORA_BC_LR     = 1e-4    # lr do Adam dedicado da âncora
 # Currículo automático: promove a noite-alvo quando a janela CHEIA da noite alvo cruza o limiar.
 CURRICULO_LIMIAR = _env_float("FNAF_CURRICULO_LIMIAR", 0.50)
 
+# TRAVA do currículo (run 4, ago/2026 — auditoria dos dados da run 2). A promoção automática é
+# a suspeita nº 1 da morte da run 2: promoveu p/ Noite 2 em ~52k e a Noite 1 DESABOU de 53,3%
+# para 0-3,3% (ambas em janela CHEIA de 30 eps), com morte_energia indo de 2,6% p/ 99,3% — a
+# Noite 2 ensinou gasto de energia e sobrescreveu a política frugal que o BC tinha semeado
+# (esquecimento catastrófico / transferência negativa). Com False o alvo fica onde está e o
+# callback só REGISTRA a métrica. Reabrir só quando a Noite 1 se sustentar e houver defesa
+# contra o esquecimento (ANCORA_BC é a ferramenta certa p/ isso).
+CURRICULO_ATIVO = False
+
 # Métrica informativa: a partir de qual win_rate (janela móvel) na Noite 1 considerá-la "dominada".
 # Só um alerta no resumo [POR NOITE] — quem muda o alvo é o CurriculumCallback.
 NOITE1_DOMINIO = _env_float("FNAF_NOITE1_DOMINIO", 0.60)
@@ -527,8 +536,13 @@ class CurriculumCallback(BaseCallback):
             print("[curriculo] AVISO: FNAF_RESET_METODO != continue — a promocao nao muda os resets "
                   "(new_game sempre volta pra Noite 1).")
         self._aplicar(alvo)
-        print(f"[curriculo] noite-alvo inicial: {self.alvo} "
-              f"(promove a {self.limiar*100:.0f}% na janela de {self.janela_min} eps)")
+        if CURRICULO_ATIVO:
+            print(f"[curriculo] noite-alvo inicial: {self.alvo} "
+                  f"(promove a {self.limiar*100:.0f}% na janela de {self.janela_min} eps)")
+        else:
+            print(f"[curriculo] TRAVADO na Noite {self.alvo} (CURRICULO_ATIVO=False): so mede, "
+                  f"nao promove. Motivo: a promocao em ~52k derrubou a Noite 1 de 53% p/ ~0 na "
+                  f"run 2 (esquecimento). Destravar so com defesa anti-esquecimento.")
 
     def _aplicar(self, alvo: int) -> None:
         self.alvo = alvo
@@ -542,6 +556,8 @@ class CurriculumCallback(BaseCallback):
             print(f"[curriculo] aviso: nao salvei {self.CAMINHO}: {erro}")
 
     def _on_step(self) -> bool:
+        if not CURRICULO_ATIVO:      # trava (run 4): só mede, não promove — ver CURRICULO_ATIVO
+            return True
         if self.locals.get("dones", [False])[0]:
             d = self.metricas.win[self.alvo]      # janela SÓ da noite alvo
             if (self.alvo < self.noite_max and len(d) >= self.janela_min
@@ -754,7 +770,8 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
           + (f" | warmup do crítico: {WARMUP_FRAC*100:.0f}% do treino (clip {WARMUP_CLIP})"
              if WARMUP_FRAC > 0 else "")
           + (f" | âncora BC: peso {ANCORA_BC_PESO}→0, {ANCORA_BC_PASSOS} ep/rollout, lr {ANCORA_BC_LR}"
-             if ANCORA_BC else ""))
+             if ANCORA_BC else "")
+          + (" | curriculo TRAVADO" if not CURRICULO_ATIVO else ""))
     if WARMUP_FRAC > 0 and not (bc_path and carregar_modelo is None):
         print("[warmup] AVISO: FNAF_WARMUP_FRAC > 0 faz sentido em treino FRESCO com --bc "
               "(ator clonado + crítico frio). Sem BC, só atrasa o início; em retomada, a janela "
