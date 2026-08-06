@@ -308,27 +308,25 @@ def _carregar_episodios(caminhos_json: list[str]) -> list[dict]:
 
 
 def _pesos_classe(episodios: list[dict], cap_mult: float = 10.0,
-                  modo: str = "sqrt") -> torch.Tensor:
-    """Peso por classe da perda do BC (não dá p/ reamostrar frames soltos sem quebrar a sequência
-    da LSTM, então o balanceamento vira peso na perda), capado em cap_mult× a mediana.
+                  expoente: float = 0.75) -> torch.Tensor:
+    """Peso por classe da perda do BC = 1/freq**expoente, capado em cap_mult× a mediana. (Não dá
+    p/ reamostrar frames soltos sem quebrar a sequência da LSTM, então o balanceamento vira peso
+    na perda.)
 
-    `modo` controla a AGRESSIVIDADE — e isso é um trade-off real descoberto na auditoria:
-      • "inv"  = 1/freq: equilibra as classes ao máximo, mas empurra a política pra DISTRIBUIÇÃO
-        UNIFORME (entropia → ln17 = 2.83). Foi o que produziu clones indecisos (H≈2.4-2.8),
-        inúteis como warmstart — o RL SORTEIA a ação, então H alto = agente quase aleatório.
-      • "sqrt" = 1/sqrt(freq) (DEFAULT): ainda tira as ações raras do fundo do poço, mas mantém
-        o clone perto da distribuição REAL do humano — que é o objetivo de um warmstart (imitar),
-        não o de um classificador balanceado (maximizar macro-recall).
-      • "nenhum" = máxima verossimilhança pura: fidelidade máxima ao humano, mas o oceano de
-        "nada" (86% dos frames) pode afogar portas/câmeras.
-    Se o clone não passar no aceite por H alto, use um modo mais brando; se não passar por macro
-    baixo, use um mais agressivo."""
+    O `expoente` é o dial entre DOIS modos de falha medidos nos nossos dados ('nada' = 82% dos
+    frames), ambos observados na prática:
+      • 1.0 (1/freq): equilíbrio perfeito — 'nada' cai p/ 5.9% do gradiente, as raras sobem p/
+        58.8%. A política é empurrada pra UNIFORME → clone indeciso (H≈2.4-2.8), inútil como
+        warmstart, porque o RL SORTEIA a ação (H alto = agente quase aleatório).
+      • 0.5 (1/sqrt): brando demais — 'nada' ainda domina 38.4% do gradiente e o argmax COLAPSA
+        na classe majoritária (top-1 = 86.5% = baseline "sempre nada", macro travado em 6.2%).
+      • 0.75 (DEFAULT): meio-termo. Tira 'nada' do domínio sem achatar tudo pra uniforme.
+    Se o clone reprovar por H alto, baixe; se reprovar por macro baixo (colapso em 'nada'), suba."""
     cont = Counter()
     for ep in episodios:
         cont.update(ep["acoes"].tolist())
-    if modo == "nenhum":
+    if expoente <= 0.0:
         return torch.ones(NUM_ACOES)
-    expoente = 1.0 if modo == "inv" else 0.5
     peso = {c: 1.0 / (n ** expoente) for c, n in cont.items()}
     cap = cap_mult * float(np.median(list(peso.values())))
     vec = torch.ones(NUM_ACOES)
@@ -400,7 +398,7 @@ def _score_clone(top1: float, macro: float) -> float:
 
 def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float = 1e-3,
                           paciencia: int = 15, chunk: int = 256, restarts: int = 4,
-                          modo_pesos: str = "sqrt"):
+                          expoente_pesos: float = 0.75):
     """BC RECORRENTE (run 3): clona as demos como SEQUÊNCIAS numa política RecurrentPPO, com
     teacher forcing e BPTT truncado. Diferente do BC feedforward (embaralha frames soltos → só o
     extractor transfere pra LSTM), aqui a própria LSTM + cabeças são treinadas, então o warmstart
@@ -433,9 +431,9 @@ def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float
     print(f"\nSplit por episódio: {len(treino)} treino / 1 validação "
           f"('{val['nome']}', noite {val['noite']})")
 
-    pesos_cpu = _pesos_classe(episodios, modo=modo_pesos)
-    print(f"Balanceamento de classes: modo '{modo_pesos}' "
-          f"(sqrt = equilibra sem empurrar o clone pra uniforme)")
+    pesos_cpu = _pesos_classe(episodios, expoente=expoente_pesos)
+    print(f"Balanceamento de classes: expoente {expoente_pesos} "
+          f"(1.0 = uniforme demais / 0.5 = colapsa em 'nada')")
 
     print("\nCriando RecurrentPPO (LSTM hidden 128, 1 camada, critic_lstm) — mesma arquitetura da run...")
     env = FNAFEnv()
@@ -453,6 +451,7 @@ def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float
         pesos = pesos_cpu.to(device)
         optimizer = optim.Adam(policy.parameters(), lr=lr)
         melhor_score, melhor_info, melhor_estado, sem_melhora = -1.0, None, None, 0
+        melhor_perda = float("inf")
         for epoch in range(epochs):
             random.shuffle(treino)
             perda_epoca, n_chunks = 0.0, 0
@@ -469,11 +468,18 @@ def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float
                     perda_epoca += perda.item()
                     n_chunks += 1
 
+            perda_media = perda_epoca / max(n_chunks, 1)
             top1_val, macro_val, h_val, recall = _avaliar_recorrente(policy, val, device, chunk)
             score = _score_clone(top1_val, macro_val)
-            print(f"Época {epoch+1:3d}/{epochs} | Loss: {perda_epoca/max(n_chunks,1):.4f} | "
+            print(f"Época {epoch+1:3d}/{epochs} | Loss: {perda_media:.4f} | "
                   f"top-1: {top1_val*100:.1f}% | macro: {macro_val*100:.1f}% | "
                   f"H: {h_val:.2f} | score: {score*100:.1f}")
+            # A perda ainda desce? Então o modelo AINDA ESTÁ APRENDENDO — não conte paciência.
+            # Sem isso o early stop matava a run no platô inicial de "sempre nada" (score
+            # congelado em 11.7 por dezenas de épocas enquanto a loss caía de 2.4 p/ 1.8): o
+            # modelo morria antes de escapar da bacia da classe majoritária.
+            aprendendo = perda_media < melhor_perda * 0.995
+            melhor_perda = min(melhor_perda, perda_media)
             if score > melhor_score:
                 melhor_score = score
                 melhor_info = (top1_val, macro_val, h_val)
@@ -482,10 +488,12 @@ def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float
                 print("  Recall por classe (validação):")
                 for c in sorted(recall):
                     print(f"    {ACOES.get(c, c):<20} {recall[c]*100:5.1f}%")
+            elif aprendendo:
+                sem_melhora = 0          # loss caindo: dá mais tempo pro score reagir
             else:
                 sem_melhora += 1
                 if sem_melhora >= paciencia:
-                    print(f"\nEarly stop: {paciencia} épocas sem melhora no score.")
+                    print(f"\nEarly stop: {paciencia} épocas sem melhora no score NEM na loss.")
                     break
         if melhor_estado is not None:
             policy.load_state_dict(melhor_estado)
@@ -505,23 +513,32 @@ def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float
     print(f"\n>>> MELHOR de {restarts} restarts: score {melhor_global*100:.1f} "
           f"(top-1 {top1*100:.1f}% | macro {macro*100:.1f}% | H {h_clone:.2f})")
 
-    # Aceite do clone (auditoria 08/2026): o warmstart só vale se o clone IMITA (top-1) e é
-    # CONFIANTE (H baixo — o RL sorteia a ação, não usa argmax). Um clone com H≈2.8 injeta uma
-    # política quase uniforme e reproduz o cold-start que travou a run 3.
+    # ── Aceite do clone — calibrado por EVIDÊNCIA, não por palpite ────────────────────────────
+    # Referência: o único clone que comprovadamente serviu de warmstart (BC feedforward da run 1,
+    # que abriu a Noite 1 em ~50%) tinha top-1 46.6% / macro 36.9% / score 41.2.
+    # ATENÇÃO ao top-1: 'nada' é 82% dos frames, então "sempre nada" já marca ~86.5% de top-1.
+    # Exigir top-1 ALTO portanto EXIGE o colapso na classe majoritária — o oposto do que se quer.
+    # Um clone que reage às ações raras necessariamente TROCA top-1 por macro; quem mede isso é
+    # o score (harmônica). Por isso o portão é score + macro + H, e o top-1 só como piso frouxo.
     problemas = []
-    if top1 < 0.70:
-        problemas.append(f"top-1 {top1*100:.1f}% < 70% (não imita o humano)")
-    if h_clone > 1.3:
-        problemas.append(f"H {h_clone:.2f} > 1.3 (clone indeciso — warmstart fraco)")
+    if melhor_global < 0.35:
+        problemas.append(f"score {melhor_global*100:.1f} < 35 (referência: 41 do clone que funcionou)")
     if macro < 0.25:
-        problemas.append(f"macro {macro*100:.1f}% < 25% (ignora ações raras: portas/câmeras)")
+        problemas.append(f"macro {macro*100:.1f}% < 25% (ignora as ações raras: portas/câmeras)")
+    if h_clone > 1.3:
+        problemas.append(f"H {h_clone:.2f} > 1.3 (clone indeciso — o RL sorteia a ação; H alto "
+                         f"reproduz o cold-start)")
+    if top1 < 0.30:
+        problemas.append(f"top-1 {top1*100:.1f}% < 30% (não imita nem o comportamento comum)")
     if problemas:
         print("[AVISO] Clone ABAIXO do aceite — NÃO use pra treinar ainda:")
         for p in problemas:
             print(f"   - {p}")
-        print("   Ações: gravar mais demos de NOITE 1 (frugalidade de energia) ou subir 'restarts'.")
+        print("   Diagnóstico rápido:")
+        print("     macro ~6% e top-1 ~86% -> COLAPSO em 'nada': suba expoente_pesos (0.75 -> 1.0)")
+        print("     H > 2 e top-1 baixo    -> empurrado p/ UNIFORME: baixe expoente_pesos (-> 0.5)")
     else:
-        print("[OK] Clone dentro do aceite (top-1 >= 70%, H <= 1.3, macro >= 25%).")
+        print("[OK] Clone dentro do aceite (score >= 35, macro >= 25%, H <= 1.3).")
 
     caminho_saida = "modelos/fnaf_bc.zip"
     melhor_modelo.save(caminho_saida)
