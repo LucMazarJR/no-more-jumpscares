@@ -153,22 +153,25 @@ WARMUP_CLIP = 0.03
 # Constantes de CÓDIGO (não variam por dispositivo → fora do .env; flipar aqui e o git leva pros
 # 2 PCs, sem drift). Default OFF (gated): ligar sob evidência (energia seguir dominante / hábito
 # se perdendo). Só tem efeito com RecurrentPPO (usa a get_distribution recorrente).
-ANCORA_BC        = False   # True liga a âncora
-ANCORA_BC_PESO   = 1.0     # escala inicial da perda de âncora (decai até 0 no fim)
+ANCORA_BC        = True    # LIGADA (run 5): defende a Noite 1 durante o currículo — ver abaixo
+ANCORA_BC_PESO   = 1.0     # escala inicial da perda de âncora (decai até 0)
 ANCORA_BC_PASSOS = 1       # episódios de BC por rollout
 ANCORA_BC_LR     = 1e-4    # lr do Adam dedicado da âncora
+ANCORA_BC_STEPS  = 150_000 # steps até o peso chegar a 0 (contados de quando a âncora liga)
 
 # Currículo automático: promove a noite-alvo quando a janela CHEIA da noite alvo cruza o limiar.
 CURRICULO_LIMIAR = _env_float("FNAF_CURRICULO_LIMIAR", 0.50)
 
-# TRAVA do currículo (run 4, ago/2026 — auditoria dos dados da run 2). A promoção automática é
-# a suspeita nº 1 da morte da run 2: promoveu p/ Noite 2 em ~52k e a Noite 1 DESABOU de 53,3%
-# para 0-3,3% (ambas em janela CHEIA de 30 eps), com morte_energia indo de 2,6% p/ 99,3% — a
-# Noite 2 ensinou gasto de energia e sobrescreveu a política frugal que o BC tinha semeado
-# (esquecimento catastrófico / transferência negativa). Com False o alvo fica onde está e o
-# callback só REGISTRA a métrica. Reabrir só quando a Noite 1 se sustentar e houver defesa
-# contra o esquecimento (ANCORA_BC é a ferramenta certa p/ isso).
-CURRICULO_ATIVO = False
+# TRAVA do currículo. Ficou False na run 4 porque a promoção automática matou a run 2 (promoveu
+# em ~52k e a Noite 1 DESABOU de 53,3% p/ 0-3,3%, com morte_energia indo a 99,3%: a Noite 2
+# ensinou gasto e sobrescreveu a política frugal — esquecimento catastrófico).
+# DESTRAVADO na run 5 (ago/2026) porque as DUAS condições que faltavam foram atingidas:
+#   1. A Noite 1 se sustenta sozinha (~50% de vitória, 120 de 143 vitórias GERIDAS, não apagão);
+#   2. Existe defesa contra o esquecimento — a ANCORA_BC, agora LIGADA, puxa a política de volta
+#      pras demos humanas (majoritariamente Noite 1) enquanto o RL aprende a Noite 2.
+# Motivo de destravar: o agente só chega na Noite 2 VENCENDO a Noite 1, então coletou 553 eps de
+# N1 contra 142 de N2 — está faminto justamente na noite que precisa aprender.
+CURRICULO_ATIVO = True
 
 # Métrica informativa: a partir de qual win_rate (janela móvel) na Noite 1 considerá-la "dominada".
 # Só um alerta no resumo [POR NOITE] — quem muda o alvo é o CurriculumCallback.
@@ -182,8 +185,35 @@ def _env_str_obrigatorio(nome: str) -> str:
     return valor.strip()
 
 
+def _arquivar_logs_da_run_anterior() -> None:
+    """Move os logs da run anterior p/ logs/analise/historico/ com carimbo de data.
+
+    Chamado só em treino FRESCO (--novo). Sem isso os logs de runs diferentes se ACUMULAM no
+    mesmo arquivo (append) e toda análise posterior mistura épocas — foi o que sujou a leitura
+    das runs 1-3, onde 'morte_energia na Noite 1' somava sessões de builds distintos. Os
+    caminhos CORRENTES não mudam (logs/treino.log, logs/analise/treino_detalhado.log), então
+    os parsers seguem funcionando; muda só o que é passado, que sai da frente."""
+    destino = "logs/analise/historico"
+    os.makedirs(destino, exist_ok=True)
+    carimbo = datetime.now().strftime("%Y%m%d_%H%M")
+    movidos = []
+    for origem in ("logs/treino.log", "logs/analise/treino_detalhado.log",
+                   "logs/analise/treino_steps.log", "logs/desyncs.log"):
+        if not os.path.exists(origem) or os.path.getsize(origem) == 0:
+            continue
+        base = os.path.basename(origem).replace(".log", "")
+        alvo = f"{destino}/{base}_{carimbo}.log"
+        try:
+            os.replace(origem, alvo)
+            movidos.append(os.path.basename(alvo))
+        except OSError as erro:
+            print(f"[logs] aviso: nao arquivei {origem} ({erro})")
+    if movidos:
+        print(f"[logs] run anterior arquivada em {destino}/: {', '.join(movidos)}")
+
+
 class LogCallback(BaseCallback):
-    def __init__(self, log_steps: bool = False):
+    def __init__(self, log_steps: bool = False, rotacionar: bool = False):
         super().__init__()
         self.episodio          = 0
         self.episodios_validos = 0
@@ -196,6 +226,8 @@ class LogCallback(BaseCallback):
         self._log_steps        = log_steps
 
         os.makedirs("logs/analise", exist_ok=True)
+        if rotacionar:
+            _arquivar_logs_da_run_anterior()
         cabecalho = f"\n{'='*60}\nTreino iniciado\n{'='*60}\n"
 
         # Convenção de logs: treino.log (e o console) ficam ENXUTOS — é o que se lê durante a
@@ -583,16 +615,19 @@ class AncoraBC(BaseCallback):
     train() do PPO no mesmo ciclo — nudge de âncora, depois a atualização on-policy."""
 
     def __init__(self, caminhos_demos: list[str], peso_inicial: float = ANCORA_BC_PESO,
-                 passos: int = ANCORA_BC_PASSOS, lr: float = ANCORA_BC_LR):
+                 passos: int = ANCORA_BC_PASSOS, lr: float = ANCORA_BC_LR,
+                 duracao: int = ANCORA_BC_STEPS):
         super().__init__()
         self.caminhos = caminhos_demos
         self.peso_inicial = peso_inicial
         self.passos = passos
         self.lr = lr
+        self.duracao = duracao
         self.ativa = False
         self.episodios = None
         self.pesos_classe = None
         self.optimizer = None
+        self._step_inicial = 0
 
     def _on_training_start(self) -> None:
         if not isinstance(self.model, RecurrentPPO):
@@ -608,8 +643,10 @@ class AncoraBC(BaseCallback):
         self.pesos_classe = _pesos_classe(self.episodios).to(self.model.device)
         self.optimizer = optim.Adam(self.model.policy.parameters(), lr=self.lr)
         self.ativa = True
+        self._step_inicial = int(self.model.num_timesteps)
         print(f"[ancora_bc] ATIVA: {len(self.episodios)} demos, peso inicial {self.peso_inicial}, "
-              f"{self.passos} episódio(s)/rollout, lr {self.lr} — peso decai linear até 0.")
+              f"{self.passos} episódio(s)/rollout, lr {self.lr} — decai até 0 em "
+              f"{self.duracao:,} steps (a partir do step {self._step_inicial:,}).")
 
     def _on_step(self) -> bool:
         return True
@@ -619,9 +656,12 @@ class AncoraBC(BaseCallback):
             return
         import random as _random
         from src.agent.behavioral_cloning import _chunks_episodio, _estado_lstm_zero
-        # Peso decai com o progresso RESTANTE (1.0 → 0.0): forte no início, some no fim (não fixa
-        # o ótimo — o RL fica livre pra divergir do humano quando já aprendeu).
-        peso = self.peso_inicial * max(self.model._current_progress_remaining, 0.0)
+        # Peso decai linear sobre a PRÓPRIA duração da âncora, contada a partir do step em que
+        # ela ligou — NÃO sobre o _current_progress_remaining do SB3. Em RETOMADA aquele
+        # progresso já vem adiantado (o total vira checkpoint+timesteps), então a âncora nasceria
+        # meia-força ou quase morta, sem relação com o que ela precisa proteger.
+        andado = int(self.model.num_timesteps) - self._step_inicial
+        peso = self.peso_inicial * max(1.0 - andado / max(self.duracao, 1), 0.0)
         self.logger.record("custom/ancora_bc/peso", peso)
         if peso <= 1e-6:
             self.logger.record("custom/ancora_bc/loss", 0.0)
@@ -779,7 +819,8 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
 
     # log_callback ANTES do checkpoint na lista: assim, no step do save, o contador de episódio
     # já está atualizado quando CheckpointComLog imprime o contexto.
-    log_callback = LogCallback(log_steps=log_steps)
+    # rotacionar em treino FRESCO: arquiva os logs da run anterior p/ análises não misturarem runs
+    log_callback = LogCallback(log_steps=log_steps, rotacionar=carregar_modelo is None)
     checkpoint = CheckpointComLog(
         save_freq=10_000,
         save_path=PASTA_MODELOS,
