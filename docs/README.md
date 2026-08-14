@@ -18,6 +18,7 @@ guardados em [historico/](historico/)). Última reorganização: julho/2026
 
 | Doc | Status | O que é |
 |---|---|---|
+| [HANDOFF_PROD.md](HANDOFF_PROD.md) | 🟢 vivo (ago/2026) | **Prompt de passagem para a máquina de treino**: situação da run 5, experiência acumulada (erros já cometidos), predições/critérios de aborto, pendências e suposições não comprovadas |
 | [PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md) | 🟢 vivo (jul/2026) | A fase atual: estratégias, runbook gravação→BC→treino, métricas de sucesso/aborto, glossário |
 | [REFERENCIA_HIPERPARAMETROS.md](REFERENCIA_HIPERPARAMETROS.md) | 🟢 vivo (jul/2026) | Consulta rápida: cada hiperparâmetro, valor atual, quando e como mexer |
 | [GUIA_CONCEITOS_E_FUNCIONAMENTO.md](GUIA_CONCEITOS_E_FUNCIONAMENTO.md) | 🟢 vivo (jul/2026) | Guia didático completo (~950 linhas): do "o que é RL" ao funcionamento de cada peça |
