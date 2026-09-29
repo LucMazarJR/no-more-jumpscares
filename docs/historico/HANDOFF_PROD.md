@@ -1,5 +1,10 @@
 # Handoff para a máquina de produção — run 5 (ago/2026)
 
+> 📦 **HISTÓRICO** — retrato de agosto/2026. A run 5 descrita aqui **não rodou**. A leitura da
+> run 4 na §2 está **errada**: a tabela "2% → 55%" soma a run 3 com a run 4, e o ganho veio do
+> BC, não do RL. A leitura corrigida, a §4 (lições) atualizada e o plano vigente estão em
+> [../ESTADO_ATUAL.md](../ESTADO_ATUAL.md).
+
 > **Este documento é um PROMPT.** Ele passa o contexto acumulado de várias sessões para o agente
 > que roda na máquina de treino. Leia inteiro antes de agir. Idioma do projeto: **português**
 > (código, comentários, docs, logs).
