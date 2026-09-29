@@ -3,11 +3,9 @@
 Este é o **passo a passo, de cima para baixo**, para validar o pipeline e colocar mudanças em uso
 **sem queimar amostra de jogo** (o recurso escasso). Cada passo só começa quando o anterior está ✅.
 
-> **Fase atual (julho/2026 — pacote BC):** o treino roda **feedforward com BC warmstart**
-> (`FNAF_USAR_LSTM=0`); o runbook completo da fase está em
-> [PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md) §3 (gravação → BC → treino fresco).
-> Os Passos 4–5 (A/B da LSTM) só entram quando o **gatilho** da fase disparar
-> (PACOTE §2.7: dominada a Noite 2, estagnar na 3+ com `morte_animatronico` sem ameaça no info).
+> **Estado atual e ordem das próximas medições:** [ESTADO_ATUAL.md](ESTADO_ATUAL.md).
+> Os Passos 3–5 abaixo descrevem o A/B controle × LSTM planejado em julho/2026. Ele NÃO foi feito
+> como A/B formal: a LSTM foi ligada na run 3 pelo gatilho do PACOTE §2.7 e segue ligada. O algoritmo hoje é a constante `USAR_LSTM` em `src/agent/train.py`.
 
 > **Comandos:** assumem o venv ativo. Se não ativou, troque `python` por `venv/Scripts/python.exe`.
 > Ative com `venv\Scripts\activate` (PowerShell).
@@ -31,7 +29,7 @@ Este é o **passo a passo, de cima para baixo**, para validar o pipeline e coloc
 
 > **GPU:** o `torch` do PyPI vem **CPU-only** (`+cpu`) — o treino roda, porém mais devagar. Para CUDA,
 > reinstale o torch pelo índice da sua versão de CUDA (`--index-url https://download.pytorch.org/whl/cuXXX`).
-> `FNAF_USAR_LSTM` controla o algoritmo (`0`=PPO controle / `1`=RecurrentPPO) — ver Passos 3 e 4.
+> `USAR_LSTM` (constante em `src/agent/train.py`) controla o algoritmo (`False`=PPO controle / `True`=RecurrentPPO) — ver Passos 3 e 4.
 
 ---
 
@@ -72,7 +70,7 @@ O controle é o feedforward com noite + schedules (D6); ele **também é o gate 
 O treino roda sozinho: morre → clica o reset → começa de novo; se a janela some, reabre o jogo
 (`FNAF_EXECUTABLE_PATH`). F12 pausa; Ctrl+C encerra salvando.
 
-- [ ] `FNAF_USAR_LSTM=0` no `.env` (padrão).
+- [ ] `USAR_LSTM = False` em `src/agent/train.py`.
 - [ ] Treino fresco do controle **com BC warmstart** (fase atual):
       `python main.py treino --novo --bc modelos/fnaf_bc.zip` (o BC vem da Etapa B/C do
       PACOTE_BC_ENTROPIA §3). Acompanhar `logs/treino.log` (enxuto) e
@@ -89,8 +87,8 @@ O treino roda sozinho: morre → clica o reset → começa de novo; se a janela 
 > <30 eps o ruído domina (±20%); 50+ dá confiança; ±10% pediria ~80 eps.
 
 > **A/B em duas máquinas (em paralelo):** cada PC tem seu próprio `modelos/`, então não há risco de
-> misturar checkpoints. Rode o **controle** (`FNAF_USAR_LSTM=0`) numa máquina e a **LSTM**
-> (`FNAF_USAR_LSTM=1`) na outra, com o **mesmo orçamento**, e compare vitória + sobrevivência no fim.
+> misturar checkpoints. Rode o **controle** (`USAR_LSTM = False`) numa máquina e a **LSTM**
+> (`USAR_LSTM = True`) na outra, com o **mesmo orçamento**, e compare vitória + sobrevivência no fim.
 
 ---
 
@@ -101,14 +99,14 @@ ajuda: transfere o extractor (percepção); as cabeças/LSTM treinam do zero.
 - [ ] Pré-voo: `testar_masking` PASSOU no Passo 1 (obrigatório antes de qualquer run longo).
 - [ ] `modelos/` **sem os checkpoints do controle** (já movidos no Passo 3). Se sobrar um `.zip` de
       PPO, `RecurrentPPO.load()` tenta carregá-lo e **quebra** (arquiteturas diferentes).
-- [ ] `FNAF_USAR_LSTM=1` no `.env`.
+- [ ] `USAR_LSTM = True` em `src/agent/train.py`.
 - [ ] Treino **fresco obrigatório**: `python main.py treino --novo`, **mesmo orçamento do controle**
       (não dá para "continuar" um PPO como LSTM).
 - [ ] Durante/depois: `python -m src.utils.sonda_memoria` em **~6–10 checkpoints** do modelo LSTM —
       a recorrência tem que **usar memória** (ação muda com o histórico); se vier **INERTE**, virou
       feedforward caro (rever masking/amostra).
-- [ ] Avaliar com `FNAF_USAR_LSTM=1` + `python main.py jogar` — o flag faz carregar o RecurrentPPO e
-      **propagar o estado da LSTM**. Sem o flag, a avaliação mente (ou o load falha).
+- [ ] Avaliar com `USAR_LSTM = True` + `python main.py jogar` — a constante faz carregar o RecurrentPPO e
+      **propagar o estado da LSTM**. Sem ela, a avaliação mente (ou o load falha).
 - [ ] **Critério de desistência (definido ANTES):** se em ~100k steps a LSTM **não empatar** a
       sobrevivência do controle → reverter pro feedforward.
 
@@ -116,7 +114,7 @@ ajuda: transfere o extractor (percepção); as cabeças/LSTM treinam do zero.
 
 ## Passo 5 — Decisão do A/B
 - [ ] Comparar **Vitórias/ep + Sobrevivência média** (mesmo orçamento, ~30–50 eps cada): controle vs LSTM.
-- [ ] LSTM **≥** controle → manter (`FNAF_USAR_LSTM=1`). Senão → reverter: `FNAF_USAR_LSTM=0` e
+- [ ] LSTM **≥** controle → manter (`USAR_LSTM = True`). Senão → reverter: `USAR_LSTM = False` e
       restaurar o controle do backup do Passo 3.
 
 > A noite (D7) não tem teste offline próprio — é rastreada **internamente** pelo desfecho
@@ -136,7 +134,7 @@ ajuda: transfere o extractor (percepção); as cabeças/LSTM treinam do zero.
 - `gamma=0.997` · `learning_rate=linear(3e-4, 3e-5)` · `ent_coef` ADAPTATIVO (`ControladorEntropia`:
   alvo H 1.5→0.75 nats, coef [0.003, 0.03]) · `n_steps=4096` · `batch_size=256` · `n_epochs=4`
   · `target_kl=0.03` · `clip_reward=100`. Fonte: `REFERENCIA_HIPERPARAMETROS.md` (cabeçalho).
-- **LSTM:** `lstm_hidden_size=128` · `n_lstm_layers=1` · `enable_critic_lstm=True`. Ligar com `FNAF_USAR_LSTM=1`.
+- **LSTM:** `lstm_hidden_size=128` · `n_lstm_layers=1` · `enable_critic_lstm=True`. Ligar com `USAR_LSTM = True`.
 - **Noite:** `FNAF_RESET_METODO=continue` mirando a noite-alvo, promovida AUTOMATICAMENTE pelo
   `CurriculumCallback` (50% na janela de 30 eps; persiste em `modelos/curriculo.json`). `MAX_NOITE=7`.
 - Episódio ~500–700 steps (~6–8 min real) · treino-alvo 500k steps (dias, multi-sessão, retomar via
@@ -162,14 +160,14 @@ python -m src.utils.testar_deteccao_energia
 python -m src.utils.monitor
 python main.py teste
 
-# Passo 3 — CONTROLE (FNAF_USAR_LSTM=0): treino fresco com BC, avaliar, depois backup de modelos/
+# Passo 3 — CONTROLE (USAR_LSTM = False): treino fresco com BC, avaliar, depois backup de modelos/
 python main.py treino --novo --bc modelos/fnaf_bc.zip
 python main.py jogar
 
-# Passo 4 — LSTM (FNAF_USAR_LSTM=1), modelos/ limpo, treino fresco, mesmo orçamento
+# Passo 4 — LSTM (USAR_LSTM = True), modelos/ limpo, treino fresco, mesmo orçamento
 python main.py treino --novo
 python -m src.utils.sonda_memoria      # ~6-10 checkpoints
-python main.py jogar                   # avaliar com FNAF_USAR_LSTM=1
+python main.py jogar                   # avaliar com USAR_LSTM = True
 
 # Passo 6 — opcional (D5): a CNN contribui?
 python -m src.utils.ablacao_offline

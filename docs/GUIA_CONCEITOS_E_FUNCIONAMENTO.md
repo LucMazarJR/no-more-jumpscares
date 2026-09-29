@@ -798,14 +798,14 @@ com **memória**: carrega um resumo do passado de step a step. Isso permite apre
 **longo alcance** ("faz tempo que não olho a câmera → risco subindo").
 
 ```text
-FNAF_USAR_LSTM=1  → usa RecurrentPPO (LSTM) em vez de PPO (feedforward)
+USAR_LSTM = True   → usa RecurrentPPO (LSTM) em vez de PPO (feedforward)
 LSTM pequena: lstm_hidden_size=128, n_lstm_layers=1
 ```
 
-> **Fase atual: DESLIGADA (`FNAF_USAR_LSTM=0`).** O 12º estado (`tempo_sem_camera`) tornou o risco
-> do Foxy **observável sem memória**, e o warmstart de BC só transfere 100% dos pesos no feedforward.
-> A LSTM volta como A/B se, dominada a Noite 2, o agente estagnar na 3+ morrendo do que não se vê
-> (ver PACOTE_BC_ENTROPIA.md §2.7 — o caso restante é o Freddy).
+> **Estado (set/2026): LIGADA desde a run 3 (jul/2026)** — o BC recorrente transfere 100% dos
+> pesos para a RecurrentPPO, o que eliminou o motivo de mantê-la desligada. O algoritmo é a
+> constante `USAR_LSTM` em `src/agent/train.py` (não mais o `.env`). Estado do projeto:
+> [ESTADO_ATUAL.md](ESTADO_ATUAL.md).
 
 > **Atenção:** a LSTM exige **masking** correto (`episode_starts`) — ela precisa **zerar a memória**
 > no início de cada episódio, senão "lembra" da noite anterior e a avaliação mente. Há utilitários
@@ -834,7 +834,7 @@ diretamente no código:
 | **D4 / 4A / 4B** | Visão computacional + potential shaping | Extrair estado da imagem (ameaça por template, energia por OCR, porta por cor) e guiar com Φ | `_atualizar_ameaca`, `_ler_energia`, `_potencial_seguranca` |
 | **D5** | Ablação | Testar se a CNN realmente contribui, zerando um ramo da observação na avaliação | `main.py jogar --ablacao imagem\|estados` |
 | **D6** | Schedules (γ, LR, entropia) | γ 0.995→0.997, LR linear 3e-4→3e-5; o schedule de entropia evoluiu p/ o termostato (§6.4) | `ControladorEntropia`, `linear()` em train.py |
-| **D7** | Memória + currículo | LSTM (RecurrentPPO) p/ Freddy — desligada nesta fase (§10.2); noite no estado; reset new_game/continue automatizado | `FNAF_USAR_LSTM`, `decidir_reset`, `CurriculumCallback` |
+| **D7** | Memória + currículo | LSTM (RecurrentPPO) — ligada desde a run 3 (§10.2); noite no estado; reset new_game/continue automatizado | `USAR_LSTM`, `decidir_reset`, `CurriculumCallback` |
 
 > **Sobre D6 (importante para os experimentos):** os botões mudaram **juntos** porque amostra é
 > cara (rodar runs isolados sairia caro). A regra do projeto: se um pacote **piorar**, reverter

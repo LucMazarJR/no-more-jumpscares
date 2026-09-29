@@ -130,12 +130,14 @@ Foxy é observável) → o PPO feedforward volta a ser suficiente (ver 2.7).
 > **Run 3 (14/07/2026):** a telemetria cravou "morre CEGO" → o Φ ganhou o QUARTO termo,
 > `−PESO_INFO·(stale_esq+stale_dir)` (knob `FNAF_PESO_INFO`, default 0.3/lado, saturação
 > `FNAF_INFO_SATURACAO_S=30s`), sobre os NOVOS estados 13-14 (idade da informação de cada
-> lado — mesmo padrão do 12º/Foxy). Ficar às cegas nos 2 lados custa −0,6 contínuo; um blink
+> lado — mesmo padrão do 12º/Foxy). Ficar às cegas nos 2 lados custa −0,6 **uma vez** (o shaping
+> telescopa: parado às cegas, o termo por step é só (γ−1)·Φ ≈ +0,002, desprezível — corrigido
+> em set/2026); um blink
 > de luz (~2s ≈ 0,2% de energia ≈ 0,008 no termo de energia) zera o lado — o check paga com
 > folga. Ver §2.7 (LSTM) p/ o pacote completo da run 3. O potencial de energia telescopa como os
 > demais (mesma GAMMA, não move o ótimo) e faz cada % gasto custar NA HORA. De quebra, a run
 > validou o 12º estado: nosso crítico fechou com explained_variance ~0,99, enquanto o build
-> "cego" do PC 2 (sem percepção — ver AVALIACAO_TREINO_PC_CEGO.md) degrada o crítico após 100k
+> "cego" do PC 2 (sem percepção; a análise AVALIACAO_TREINO_PC_CEGO.md nunca foi commitada) degrada o crítico após 100k
 > por observabilidade parcial.
 
 ### 2.4 BC warmstart — a maior alavanca (`gravar_gameplay.py`, `behavioral_cloning.py`)
@@ -168,7 +170,7 @@ ele não vem sozinho:
 >   SEQUÊNCIAS (1 dataset = 1 episódio) numa política RecurrentPPO, teacher-forced com BPTT
 >   truncado (chunks de 256, estado oculto propagado/detachado, resetado no início) e perda NLL
 >   ponderada por classe. Agora a LSTM+heads transferem **100%** (`transferidos 50/50`). O
->   `main.py bc` roteia por `FNAF_USAR_LSTM` (=1 recorrente, =0 feedforward).
+>   `main.py bc` roteia pela constante `USAR_LSTM` de `train.py` (True recorrente, False feedforward).
 > - **Âncora BC** (`AncoraBC` em `train.py`; constante de código `ANCORA_BC`, default OFF/gated):
 >   usa as demos DURANTE o RL (não só init, que o RL erode) — passos de BC recorrente por rollout
 >   com peso decaindo linear até 0, num Adam dedicado. Regularizador que segura os hábitos do
@@ -206,6 +208,10 @@ a mediana — o oceano de "nada" não afoga as portas), split 90/10 ESTRATIFICAD
 recall por classe na validação, melhor checkpoint por macro-recall, early stop (paciência 15).
 
 **Aceite do BC:** recall val de portas ≥ 60%, câmera ≥ 50%, luzes ≥ 40%, top-1 ≥ 70%.
+
+> **Corrigido (ago/2026):** exigir top-1 ≥ 70% exige o COLAPSO em "nada" (~82% dos registros:
+> "sempre nada" já marca ~86%). O critério hoje é a média harmônica de top-1 e macro-recall
+> (`_score_clone`). Referência de um clone que funcionou: top-1 46,6% / macro 36,9%.
 
 ### 2.5 Currículo automático — `CurriculumCallback` (`src/agent/train.py`)
 
@@ -253,14 +259,14 @@ que não dá para ver sem memória".
 > Atribuição individual borrada de propósito — `sonda_memoria` e `jogar --ablacao` decompõem
 > depois.
 >
-> Consequências práticas: `FNAF_USAR_LSTM=1` no .env da máquina de treino; treino do zero
+> Consequências práticas: LSTM ligada (hoje a constante `USAR_LSTM=True` em `train.py`); treino do zero
 > (obs 12→14 muda shape); BC re-treinado (`main.py bc` — o dataset reconstrói
 > idade_info_esq/dir offline nos datasets antigos) e transferência PARCIAL (só extractor —
 > heads+LSTM aleatórias) ⇒ **começo mais lento que a run 2 é esperado**;
 > `FNAF_WARMUP_FRAC=0` (o warmup protege um ator clonado — com heads aleatórias não há o que
 > proteger). Métrica-chave da run: `morte_anim_com_flag` SUBINDO (morrer VENDO = luz sendo
 > usada = flags latacham) e depois `morte_animatronico` caindo. Pré-voo obrigatório:
-> `python -m src.utils.testar_masking` com `FNAF_USAR_LSTM=1`.
+> `python -m src.utils.testar_masking` com `USAR_LSTM=True`.
 
 ### 2.8 `n_steps` 8192 → 4096 (`FNAF_N_STEPS`)
 
@@ -317,7 +323,8 @@ episódios de Noite 1 → sobrevivência média ≥ 200s (não precisa vencer; p
 ### Etapa D — RL do zero
 
 Pré-requisitos já garantidos nesta implementação: modelos antigos movidos para
-`modelos/backup_pre_bc/`, `.env` com `FNAF_USAR_LSTM=0` e `FNAF_NOITE_DESEJADA=1`.
+`modelos/backup_pre_bc/`, `.env` com `FNAF_USAR_LSTM=0` e `FNAF_NOITE_DESEJADA=1` (na época; hoje
+o algoritmo é a constante `USAR_LSTM` em `train.py` e o `.env` não o controla).
 **Pare qualquer treino antigo em andamento** (o teste do bundle 8192 perdeu o sentido).
 
 ```

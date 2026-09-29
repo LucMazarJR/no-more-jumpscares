@@ -383,20 +383,18 @@ entropia pelo `ControladorEntropia` (termostato — ver seção `ent_coef` acima
 
 ## RecurrentPPO (LSTM): por que, QUANDO, e como diagnosticar
 
-> **Fase atual: DESLIGADA (`FNAF_USAR_LSTM=0`).** O 12º estado (`tempo_sem_camera`) tornou o
-> risco do Foxy observável e as ameaças já são HELD (o detector guarda memória) — o motivo
-> original da LSTM sumiu, e o warmstart de BC só transfere 100% dos pesos no PPO feedforward.
-> **Gatilho para reabrir o A/B:** dominada a Noite 2, estagnar na 3+ com `morte_animatronico`
-> dominante SEM ameaça registrada no info terminal (= morrer do que não se vê sem memória,
-> ex.: Freddy). Ver [PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md) §2.7.
+> **Estado (set/2026): LIGADA desde a run 3 (jul/2026)** — o BC recorrente transfere 100% dos
+> pesos para a RecurrentPPO, o que eliminou o motivo de mantê-la desligada. O algoritmo é a
+> constante `USAR_LSTM` em `src/agent/train.py` (não mais o `.env`). Estado do projeto:
+> [ESTADO_ATUAL.md](ESTADO_ATUAL.md).
 
 **Por que LSTM (não frame-stacking):** Freddy **não é detectável por frame** (só aparece nas
 câmeras; seu avanço é um processo de minutos). Lidar com ele exigiria memória de **longo
 alcance** — frame-stacking (poucos frames) não cobre. A noite entra no estado p/ condicionar a
-agressividade (a LSTM aprenderia "noite 4 = mais rápido"). Ligar com `FNAF_USAR_LSTM=1`.
+agressividade (a LSTM aprenderia "noite 4 = mais rápido"). Ligar com `USAR_LSTM = True`.
 
 **Começa pequena:** `lstm_hidden_size=128`, `n_lstm_layers=1`. Memória maior = mais parâmetros =
-mais amostra; só cresça se ajudar. **A/B contra o controle** (feedforward, `FNAF_USAR_LSTM=0`),
+mais amostra; só cresça se ajudar. **A/B contra o controle** (feedforward, `USAR_LSTM = False`),
 mudando SÓ o algoritmo, com **critério de desistência** (se em ~100k steps não empatar a
 sobrevivência do controle → reverter).
 
@@ -410,6 +408,6 @@ sobrevivência do controle → reverter).
 | `testar_masking` FALHA (estado vaza) | `episode_starts` não propagado | bug no caminho de treino/avaliação — corrigir antes de qualquer run longo |
 | LSTM **não empata** o controle no orçamento | recorrência custando mais amostra do que rende | desistir (reverter pro feedforward) — frame-stacking não resolveria Foxy/Freddy de qualquer forma |
 
-**Avaliação (`jogar`) precisa propagar o estado:** `FNAF_USAR_LSTM=1` faz o `modo_jogar` carregar
+**Avaliação (`jogar`) precisa propagar o estado:** `USAR_LSTM = True` faz o `modo_jogar` carregar
 RecurrentPPO e propagar `lstm_states`/`episode_starts` (resetando no início de cada episódio). Sem
 isso a avaliação mente.
