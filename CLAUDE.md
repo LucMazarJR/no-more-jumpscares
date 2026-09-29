@@ -1,61 +1,75 @@
 # no-more-jumpscares — mapa do projeto
 
-Agente RL (PPO/stable-baselines3) que joga o **FNAF 1 real** por captura de tela + mouse, em
-**tempo real** (~0,7s por step — amostra é O recurso escasso). Objetivo: vencer as noites de forma
-estável. **Fase atual (run 3, jul/2026):** RecurrentPPO (LSTM) + estados de idade da informação
-(13-14) + BC warmstart (parcial: só extractor) + termostato de entropia + currículo automático
-(`docs/PACOTE_BC_ENTROPIA.md` §2.7).
+Agente de RL (stable-baselines3) que joga o **FNAF 1 real** por captura de tela + mouse, em
+**tempo real** (~0,9 s por step; 100k steps ≈ 25 h de máquina). **Amostra é O recurso escasso**:
+um teste longo custa dias. Objetivo: vencer as noites de forma estável.
+
+**Estado atual, hipóteses abertas e próximos passos:** [docs/ESTADO_ATUAL.md](docs/ESTADO_ATUAL.md).
+Este arquivo guarda só o que é permanente. Nada de "fase atual" aqui.
 
 ## Comandos canônicos (NÃO renomear/mover os alvos)
 
 | Comando | O que faz |
 |---|---|
 | `python main.py teste` | valida reset/captura/observação (jogo aberto) |
-| `python main.py treino [--novo] [--bc modelos/fnaf_bc.zip] [--steps]` | treino (retoma o maior checkpoint sem `--novo`) |
-| `python main.py jogar [--ablacao imagem\|estados]` | avaliação determinística |
-| `python main.py bc <dataset.json> ...` | treina o Behavioral Cloning |
+| `python main.py treino [--novo] [--bc <zip>] [--nome <tag>]` | treino (sem `--novo`, retoma o maior checkpoint) |
+| `python main.py jogar [--modelo <zip>] [--estocastico] [--noite N] [--episodios K] [--ablacao imagem\|estados]` | avaliação sem aprender (log em `logs/analise/avaliacoes.log`) |
+| `python main.py bc [dataset.json ...]` | treina o Behavioral Cloning (sem args: todos os `dados/*/dataset.json`) |
+| `python -m src.utils.gravar_gameplay --noite N` | grava demos humanas para o BC (F9 inicia / F10 para) |
 | `python -m src.utils.<ferramenta>` | calibração/diagnóstico (lista em `docs/README.md`) |
-| `python -m src.utils.gravar_gameplay --noite N` | grava demos humanas p/ BC (F9 inicia / F10 para) |
-| `python scripts/<script>.py` | smoke test, métricas, MongoDB/xlsx, vecnormalize |
-| `tensorboard --logdir logs` | métricas (eventos ficam em `logs/tensorboard/`) |
+| `python scripts/<script>.py` | métricas, taxa de ação, MongoDB/xlsx, vecnormalize |
+| `tensorboard --logdir logs/tensorboard` | métricas (uma pasta por run) |
 
-Verificação offline (sem o jogo): `scripts/smoke_test.py` (6/6) ·
-`-m src.utils.testar_recompensa` (13/13) · `-m src.utils.testar_noite` (11/11) ·
-`scripts/inspecionar_vecnormalize.py`.
+Verificação offline (sem o jogo), todos devem passar: `scripts/smoke_test.py` ·
+`-m src.utils.testar_recompensa` · `-m src.utils.testar_noite` · `-m src.utils.testar_deteccao_ameaca`
+· `-m src.utils.testar_masking` (LSTM).
 
 ## Mapa de pastas (⚠ = caminho hardcoded em código, não mover)
 
 ```
 main.py                      ponto de entrada (teste|treino|jogar|bc)
-src/environment/fnaf_env.py  ambiente Gymnasium (~1500 linhas): captura, detecção, reward, reset
-src/agent/train.py           treino + callbacks (ControladorEntropia, CurriculumCallback, logs)
-src/agent/behavioral_cloning.py  BC (dataset, treino, transferir_pesos)
-src/agent/multimodal_policy.py   extractor CNN(84x84) + MLP(14 estados) → 256
+src/environment/fnaf_env.py  ambiente Gymnasium: captura, detecção, recompensa, reset
+src/agent/train.py           treino + callbacks + CONSTANTES de algoritmo/tuning
+src/agent/behavioral_cloning.py  BC (dataset, treino feedforward/recorrente, transferir_pesos)
+src/agent/multimodal_policy.py   extractor CNN (imagem) + MLP (estados)
 src/utils/                   ferramentas standalone (python -m src.utils.X) ⚠
 src/utils/referencias/       ⚠ templates de detecção COMMITADOS (morte, menu, ameaças, dígitos)
-scripts/                     smoke test, análise de logs, MongoDB/xlsx, merge (descontinuado)
-docs/                        vivos na raiz; retratos de época em docs/historico/ (índice: docs/README.md)
-modelos/                     ⚠ checkpoints + vecnormalize pareado + curriculo.json (git-ignorado)
-logs/                        ⚠ treino.log (ENXUTO) · desyncs.log · analise/ (detalhado) · tensorboard/
-dados/                       ⚠ datasets de gameplay p/ BC (git-ignorado)
-debug/                       transiente: fixtures quadro_*.png (usadas por testes) + saídas; resto em debug/arquivo/
+scripts/                     smoke test, análise de logs, MongoDB/xlsx
+docs/                        docs vivos na raiz; retratos de época em docs/historico/ (índice: docs/README.md)
+modelos/                     ⚠ checkpoints + vecnormalize pareado + curriculo.json + run.json (git-ignorado)
+logs/                        ⚠ git-ignorado (estrutura abaixo)
+dados/                       ⚠ datasets de gameplay para o BC (git-ignorado)
+debug/                       transiente: fixtures quadro_*.png (usadas por testes) + saídas de ferramentas
+```
+
+```
+logs/treino.log                       run CORRENTE, enxuto (leitura durante a execução)
+logs/desyncs.log                      run CORRENTE, dessincronias de estado por episódio
+logs/analise/treino_detalhado.log     run CORRENTE com telemetria (fonte preferida dos parsers)
+logs/analise/historico/<run>_*.log    runs passadas (arquivadas automaticamente no --novo)
+logs/analise/avaliacoes*.log          saídas do `main.py jogar` (nunca misturadas ao treino)
+logs/tensorboard/<run>/               uma pasta por run; _pre_pacote/ = runs antigas sem nome
 ```
 
 ## Convenções que importam
 
-- **Logs**: `logs/treino.log` e o console ficam ENXUTOS (leitura de execução). Telemetria
-  (Energia fim, Causa, OCORRIDO) vai para `logs/analise/treino_detalhado.log` — é o que os
-  parsers preferem. Não adicionar campos na linha de episódio fora dos previstos pelo
-  `LOG_PATTERN` (`scripts/enviar_logs_mongodb.py`).
-- **Observação**: Dict com `imagem` (84,84,1) uint8 + `estados` (14,) float32 em [0,1]. Mudar o
-  shape exige treino do zero; o extractor deriva a dimensão do espaço (nunca hardcodar).
-- **GAMMA=0.997** tem fonte única em `fnaf_env.py` (PPO + VecNormalize + shaping Φ precisam casar).
-- **Reward**: vitória +500, morte −100, denso ~60/noite por TEMPO REAL, shaping potential-based;
-  `clip_reward=100` no VecNormalize (o default 10 achatava vitória e morte no mesmo teto).
-- **Hiperparâmetros** por env var `FNAF_*` no `.env` (valores atuais no cabeçalho de
-  `docs/REFERENCIA_HIPERPARAMETROS.md`). `n_steps`/`batch` só valem em treino fresco.
-- **LSTM desligada nesta fase** (`FNAF_USAR_LSTM=0`): o BC transfere 100% dos pesos só no
-  feedforward; gatilho p/ reabrir o A/B em `docs/PACOTE_BC_ENTROPIA.md` §2.7.
-- **Medir por taxa de vitória/sobrevivência por noite**, nunca por recompensa (muda entre versões).
-- Setup de **2 PCs** (prefixo `PC=` nos logs); merge de pesos entre linhagens é DESCONTINUADO.
-- Idioma do projeto: português (código, comentários, docs, logs).
+- **Runs têm nome.** Formato `AAAA-MM-DD_runN_<algo>[_tag]`, gravado em `modelos/run.json`.
+  - O nome é a pasta do tensorboard e o prefixo dos logs arquivados.
+  - `--novo` cria uma run nova e arquiva os logs da anterior. Retomar continua a mesma run.
+  - Cada sessão no log começa com `run: <nome> | NOVO/RETOMADA | commit | data`.
+  - **Nunca misture runs numa análise**: já produziu conclusões erradas mais de uma vez.
+- **Logs:** `logs/treino.log` e o console ficam ENXUTOS. A telemetria (energia final, causa, OCORRIDO) vai para `logs/analise/treino_detalhado.log`. Não adicione campos à linha de episódio fora dos previstos pelo `LOG_PATTERN` (`scripts/enviar_logs_mongodb.py`). A linha `Treino iniciado` fica sozinha, porque o parser casa a linha exata.
+- **Observação:** um Dict com `imagem` (uint8) e `estados` (float32 em [0,1]). Mudar o shape exige treino do zero. O extractor deriva as dimensões do espaço, então nunca hardcode tamanhos.
+- **GAMMA** tem fonte única em `fnaf_env.py`: PPO, VecNormalize e o shaping Φ precisam usar o mesmo valor para o shaping telescopar.
+- **Recompensa:** terminais grandes (vitória ≫ morte ≫ denso), sinal denso por TEMPO REAL e dicas só por shaping potential-based (telescopa, não move o ótimo). `clip_reward` do VecNormalize precisa deixar a vitória passar inteira; o default 10 achatava vitória e morte no mesmo teto.
+- **Algoritmo e tuning são constantes de código** (`src/agent/train.py`), não `.env`. O `.env` já divergiu entre máquinas e fez produção rodar a configuração errada. No `.env` fica só o que varia por máquina (janela, caminho, coordenadas, timings, `PC`), mais `FNAF_RESET_METODO` e `FNAF_NOITE_DESEJADA`.
+- **Medição:**
+  - Use taxa de vitória e sobrevivência **por noite**, nunca recompensa (a escala muda entre versões).
+  - O treino amostra ações (estocástico). Para comparar avaliação com treino, use `jogar --estocastico`.
+  - Sobrevivência e causa da morte respondem mais rápido que a taxa de vitória.
+- **Método de experimento:**
+  - Uma variável por vez.
+  - Critério de aborto registrado ANTES de uma run longa.
+  - Refutar com dados uma afirmação de doc ou comentário é resultado, não problema.
+- **Setup de 2 PCs** (prefixo `PC=` nos logs). O merge de pesos entre linhagens foi DESCONTINUADO porque quebra a política.
+- **Idioma do projeto:** português (código, comentários, docs, logs).
