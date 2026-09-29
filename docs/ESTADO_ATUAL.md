@@ -129,45 +129,24 @@ diretamente.
 - M2 com queda < 10 p.p. → a imagem não contribui. A Fase 2 vira prioridade.
 - M3 com razão agente/humano < 0,6 → gravar as próximas demos no tick do agente.
 
-### Fase 2 — percepção robusta (depois do M4)
+### Fases 2 e 3 — percepção robusta + off-policy com demos
 
-Tudo atrás de flag, desligado por padrão, para não contaminar M1/M2.
+Os porquês, o "onde" no código, o runbook, os riscos e o glossário estão em
+[ESTRATEGIA_DEMOS_E_PERCEPCAO.md](ESTRATEGIA_DEMOS_E_PERCEPCAO.md). Em resumo:
 
-- **Rajada por step** (k=3–5 frames em ~60–120 ms):
-  - Mediana temporal contra a **estática** (ruído aleatório por frame, enquanto o sprite é consistente).
-  - Frame mais claro (ou score máximo) contra o **piscar das luzes**.
-  - Entra em `capture.py` e `_capturar_janela`.
-- **Movimentos súbitos:**
-  - Transformar o surto de estática da câmera observada (quando um animatrônico se move) em um
-    **estado** "câmera perturbada".
-  - Memória por câmera: comparar a vista limpa atual com a última vez que a mesma câmera foi
-    vista. Alinhar antes com `cv2.phaseCorrelate`, porque as câmeras fazem pan. Isso se
-    autocalibra, sem templates manuais.
-- **Observação redesenhada** (muda o shape, então entra junto com a Fase 3):
-  - Recortes em resolução maior (viewport da câmera + faixas das portas) no lugar da janela
-    inteira em 84×84.
-  - Canais: frame limpo e diferença contra a última vista.
-  - Mais 2 frames empilhados.
-- **Depois:** áudio por loopback WASAPI. A corrida do Foxy, as batidas na porta e a cozinha são
-  pistas sonoras imunes à estática.
+- **Fase 2 (depois do M4):**
+  - rajada de 3–5 frames por step (mediana contra a estática, frame mais claro contra o piscar);
+  - estado "câmera perturbada" e memória por câmera (alinhada com `phaseCorrelate`), contra os
+    movimentos súbitos;
+  - observação redesenhada (recortes em resolução maior, canal de diferença, 2 frames empilhados).
+- **Fase 3 (depois do M1):**
+  - off-policy estilo DQfD, com replay em disco e as demos permanentes no buffer;
+  - treino em thread paralela ao jogo;
+  - correções humanas ao vivo (HG-DAgger) no tick do agente.
 
-### Fase 3 — off-policy com demos + correções humanas (depois do M1)
-
-- **Guardar TODA transição em disco** (`dados/transicoes/`). Até hoje ~750k transições reais
-  foram descartadas depois de 4 épocas do PPO.
-- **Algoritmo no estilo DQfD:** Double/Dueling DQN, n-step (n≈10–20), replay priorizado e as
-  demos **permanentes** no buffer, com uma perda de margem que decai.
-  - O treino roda numa thread em segundo plano durante o jogo (a GPU fica ociosa nos ~0,9 s de
-    cada step), com razão updates/dados ≥ 4.
-  - Isso elimina por construção o "RL corrói o BC".
-  - Fica em `src/agent/dqfd.py`, chamado por `main.py treino --algo dqfd`. O PPO continua intacto.
-  - Validar **offline, só com as demos**, antes de tocar no jogo.
-- **HG-DAgger:** o agente joga e o humano assume o controle, pelas mesmas teclas do gravador,
-  quando ele vai errar. Só esses trechos viram rótulo.
-  - Exige menos habilidade que jogar a noite inteira. As 8 demos atuais são todas vitórias,
-    inclusive N2 e N3.
-  - Mira exatamente os estados em que o agente falha.
-  - Prioridade: N2 (hoje há só 2 demos) e fechamentos de porta.
+A observação nova muda o shape, então as duas fases entram **num único treino do zero**. Cada peça
+é validada isoladamente antes: A/B de percepção com o `jogar` sobre o mesmo BC, e DQfD offline
+contra o BC.
 
 ### Opcional — run 5 como baseline
 

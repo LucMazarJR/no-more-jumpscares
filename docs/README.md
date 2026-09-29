@@ -8,12 +8,14 @@ logs separados por run, [ESTADO_ATUAL.md](ESTADO_ATUAL.md) como fonte única do 
 
 1. [ESTADO_ATUAL.md](ESTADO_ATUAL.md) — **onde estamos**: o que as runs mediram, afirmações
    antigas corrigidas, lições acumuladas, plano com regras de decisão e hipóteses abertas.
-2. [../README.md](../README.md) — setup, comandos e configuração do `.env`.
-3. [PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md) — os mecanismos em uso (BC, termostato de
+2. [ESTRATEGIA_DEMOS_E_PERCEPCAO.md](ESTRATEGIA_DEMOS_E_PERCEPCAO.md) — **a nova estratégia**:
+   por que o RL não passou do BC e o que muda (medições, percepção, off-policy com demos).
+3. [../README.md](../README.md) — setup, comandos e configuração do `.env`.
+4. [PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md) — os mecanismos em uso (BC, termostato de
    entropia, currículo, telemetria), com runbook e glossário.
-4. [GUIA_CONCEITOS_E_FUNCIONAMENTO.md](GUIA_CONCEITOS_E_FUNCIONAMENTO.md) — a teoria do zero
+5. [GUIA_CONCEITOS_E_FUNCIONAMENTO.md](GUIA_CONCEITOS_E_FUNCIONAMENTO.md) — a teoria do zero
    (RL, PPO, recompensa, entropia) aplicada a este projeto.
-5. [MONITORAMENTO_TREINO.md](MONITORAMENTO_TREINO.md) + [GUIA_TENSORBOARD.md](GUIA_TENSORBOARD.md)
+6. [MONITORAMENTO_TREINO.md](MONITORAMENTO_TREINO.md) + [GUIA_TENSORBOARD.md](GUIA_TENSORBOARD.md)
    — como acompanhar um treino rodando.
 
 ## Todos os docs
@@ -21,6 +23,7 @@ logs separados por run, [ESTADO_ATUAL.md](ESTADO_ATUAL.md) como fonte única do 
 | Doc | Status | O que é |
 |---|---|---|
 | [ESTADO_ATUAL.md](ESTADO_ATUAL.md) | 🟢 vivo (set/2026) | **Fonte única do estado do projeto**: runs medidas, correções, lições, plano (Fases 1–3), pendências |
+| [ESTRATEGIA_DEMOS_E_PERCEPCAO.md](ESTRATEGIA_DEMOS_E_PERCEPCAO.md) | 🟢 vivo (set/2026) | **A nova estratégia**: medir antes (Fase 1), percepção robusta contra estática/piscar/movimentos súbitos (Fase 2), off-policy com demos + correções ao vivo (Fase 3) — porquês, runbook, riscos, glossário |
 | [PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md) | 🟢 vivo (jul/2026) | Os mecanismos do pacote BC + entropia: estratégias, runbook gravação→BC→treino, glossário |
 | [REFERENCIA_HIPERPARAMETROS.md](REFERENCIA_HIPERPARAMETROS.md) | 🟢 vivo (jul/2026) | Consulta rápida: cada hiperparâmetro, valor atual, quando e como mexer |
 | [GUIA_CONCEITOS_E_FUNCIONAMENTO.md](GUIA_CONCEITOS_E_FUNCIONAMENTO.md) | 🟢 vivo (jul/2026) | Guia didático completo (~950 linhas): do "o que é RL" ao funcionamento de cada peça |
