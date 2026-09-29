@@ -6,13 +6,20 @@ import sys
 from src.environment.fnaf_env import FNAFEnv, MAX_NOITE, FOXY_SATURACAO_S, INFO_SATURACAO_S
 
 
+def _valor_flag(flag: str) -> str | None:
+    """Valor de `--flag valor` em sys.argv (None se a flag faltar ou vier sem valor)."""
+    if flag not in sys.argv:
+        return None
+    i = sys.argv.index(flag)
+    valor = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
+    return None if valor is None or valor.startswith("--") else valor
+
+
 def encontrar_ultimo_modelo() -> str | None:
     """Retorna o checkpoint mais avançado em modelos/.
 
     Preferência: maior número de steps no nome; senão, o .zip mais recente.
-    Modelos '*merged*' não têm mais prioridade — fazer média de pesos entre
-    modelos treinados de inicializações diferentes produz uma política
-    quebrada (ver aviso em scripts/merge_modelos.py).
+    (Média de pesos entre linhagens foi descontinuada: quebra a política.)
     """
     def extrair_steps(path):
         m = re.search(r"_(\d+)_steps\.zip$", path)
@@ -63,16 +70,16 @@ def modo_treino():
         else:
             print("Nenhum modelo encontrado — começando do zero")
 
-    # BC warmstart (opcional): --bc <caminho.zip> inicializa a percepção a partir de um modelo
-    # de BC. Combina bem com --novo (treino fresco). Compatível com a LSTM (FNAF_USAR_LSTM=1).
-    bc_path = None
-    if "--bc" in sys.argv:
-        i = sys.argv.index("--bc")
-        bc_path = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
-        if bc_path:
-            print(f"BC warmstart: inicializando a partir de {bc_path}")
+    # BC warmstart (opcional): --bc <caminho.zip> inicializa a política a partir de um modelo
+    # de BC. Combina com --novo (treino fresco). O BC precisa casar com USAR_LSTM (train.py).
+    bc_path = _valor_flag("--bc")
+    if bc_path:
+        print(f"BC warmstart: inicializando a partir de {bc_path}")
 
-    treinar(timesteps=500_000, carregar_modelo=ultimo_modelo, bc_path=bc_path)
+    # --nome <tag>: sufixo descritivo da run nova (pasta do tensorboard e logs arquivados),
+    # ex.: --nome bc_recorrente -> logs/tensorboard/2026-09-28_run5_rppo_bc_recorrente.
+    treinar(timesteps=500_000, carregar_modelo=ultimo_modelo, bc_path=bc_path,
+            tag_run=_valor_flag("--nome"))
 
 
 def modo_bc():
@@ -104,7 +111,7 @@ def modo_bc():
         return
 
     if usar_lstm:
-        print("[BC] USAR_LSTM=True -> BC RECORRENTE (clona a LSTM+cabeças da run 3).")
+        print("[BC] USAR_LSTM=True -> BC RECORRENTE (clona a LSTM+cabeças).")
         treinar_bc_recorrente(caminhos)
     else:
         print("[BC] USAR_LSTM=False -> BC feedforward (transfere só o extractor pra LSTM).")

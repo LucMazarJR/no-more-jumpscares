@@ -1,6 +1,8 @@
 import json
 import math
 import os
+import re
+import subprocess
 import sys
 import time
 from collections import Counter, deque, defaultdict
@@ -9,6 +11,7 @@ import keyboard
 from stable_baselines3 import PPO
 from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback
+from stable_baselines3.common.logger import configure as configure_logger_sb3
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from src.environment.fnaf_env import FNAFEnv, GAMMA, MAX_NOITE, RESET_METODO, PESO_ENERGIA, PESO_INFO
 from src.agent.multimodal_policy import MultimodalExtractor
@@ -18,6 +21,10 @@ PASTA_LOGS    = "logs"
 # GAMMA vem do env (fonte única) — usado no PPO, no VecNormalize e no shaping
 # potential-based da Decisão 4; precisam casar p/ o shaping telescopar.
 CAMINHO_STATS = f"{PASTA_MODELOS}/vecnormalize.pkl"
+# Identidade da run (nome = pasta do tensorboard = prefixo dos logs arquivados). Criada no
+# treino fresco, relida na retomada: uma run = uma pasta de TB, por mais sessões que tenha.
+CAMINHO_RUN   = f"{PASTA_MODELOS}/run.json"
+PASTA_TB      = f"{PASTA_LOGS}/tensorboard"
 os.makedirs(PASTA_MODELOS, exist_ok=True)
 os.makedirs(PASTA_LOGS,    exist_ok=True)
 
@@ -185,24 +192,61 @@ def _env_str_obrigatorio(nome: str) -> str:
     return valor.strip()
 
 
-def _arquivar_logs_da_run_anterior() -> None:
-    """Move os logs da run anterior p/ logs/analise/historico/ com carimbo de data.
+def _ler_run() -> dict | None:
+    try:
+        with open(CAMINHO_RUN, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _criar_run(tag: str | None) -> dict:
+    """Cria a identidade de uma run nova e grava em modelos/run.json.
+
+    Nome: AAAA-MM-DD_runN_<algo>[_tag]. N = maior 'runN' já existente em logs/tensorboard + 1.
+    A data na frente faz o tensorboard listar as runs em ordem cronológica."""
+    numeros = [int(m.group(1)) for p in os.listdir(PASTA_TB)
+               if (m := re.search(r"_run(\d+)_", p))] if os.path.isdir(PASTA_TB) else []
+    numero = max(numeros, default=0) + 1
+    nome = f"{datetime.now():%Y-%m-%d}_run{numero}_{'rppo' if USAR_LSTM else 'ppo'}"
+    if tag:
+        nome += "_" + re.sub(r"[^\w-]+", "_", tag.strip()).strip("_").lower()
+    run = {"nome": nome, "numero": numero, "criada_em": datetime.now().isoformat(timespec="seconds")}
+    with open(CAMINHO_RUN, "w", encoding="utf-8") as f:
+        json.dump(run, f, indent=2)
+    return run
+
+
+def _versao_codigo() -> str:
+    """Commit atual (com '-dirty' se houver mudanças não commitadas) p/ o cabeçalho da sessão."""
+    try:
+        return subprocess.run(["git", "describe", "--always", "--dirty"], capture_output=True,
+                              text=True, timeout=5).stdout.strip() or "?"
+    except (OSError, subprocess.SubprocessError):
+        return "?"
+
+
+def _arquivar_logs_da_run_anterior(nome_run_anterior: str | None) -> None:
+    """Move os logs da run anterior p/ logs/analise/historico/<nome da run>_<log>.log.
 
     Chamado só em treino FRESCO (--novo). Sem isso os logs de runs diferentes se ACUMULAM no
     mesmo arquivo (append) e toda análise posterior mistura épocas — foi o que sujou a leitura
-    das runs 1-3, onde 'morte_energia na Noite 1' somava sessões de builds distintos. Os
-    caminhos CORRENTES não mudam (logs/treino.log, logs/analise/treino_detalhado.log), então
-    os parsers seguem funcionando; muda só o que é passado, que sai da frente."""
+    das runs 1-4 (a tabela "run 4: 2%→55%" somava a run 3 com a 4). Os caminhos CORRENTES não
+    mudam (logs/treino.log, logs/analise/treino_detalhado.log), então os parsers seguem
+    funcionando; muda só o que é passado, que sai da frente."""
     destino = "logs/analise/historico"
     os.makedirs(destino, exist_ok=True)
-    carimbo = datetime.now().strftime("%Y%m%d_%H%M")
+    prefixo = nome_run_anterior or f"run_sem_nome_{datetime.now():%Y%m%d_%H%M}"
     movidos = []
-    for origem in ("logs/treino.log", "logs/analise/treino_detalhado.log",
-                   "logs/analise/treino_steps.log", "logs/desyncs.log"):
+    for origem, base in (("logs/treino.log", "treino"),
+                         ("logs/analise/treino_detalhado.log", "detalhado"),
+                         ("logs/analise/treino_steps.log", "steps"),
+                         ("logs/desyncs.log", "desyncs")):
         if not os.path.exists(origem) or os.path.getsize(origem) == 0:
             continue
-        base = os.path.basename(origem).replace(".log", "")
-        alvo = f"{destino}/{base}_{carimbo}.log"
+        alvo = f"{destino}/{prefixo}_{base}.log"
+        if os.path.exists(alvo):   # nunca sobrescreve histórico
+            alvo = f"{destino}/{prefixo}_{base}_{datetime.now():%Y%m%d_%H%M}.log"
         try:
             os.replace(origem, alvo)
             movidos.append(os.path.basename(alvo))
@@ -213,7 +257,8 @@ def _arquivar_logs_da_run_anterior() -> None:
 
 
 class LogCallback(BaseCallback):
-    def __init__(self, log_steps: bool = False, rotacionar: bool = False):
+    def __init__(self, log_steps: bool = False, rotacionar: bool = False,
+                 run_anterior: str | None = None, identificacao: str = ""):
         super().__init__()
         self.episodio          = 0
         self.episodios_validos = 0
@@ -227,8 +272,11 @@ class LogCallback(BaseCallback):
 
         os.makedirs("logs/analise", exist_ok=True)
         if rotacionar:
-            _arquivar_logs_da_run_anterior()
-        cabecalho = f"\n{'='*60}\nTreino iniciado\n{'='*60}\n"
+            _arquivar_logs_da_run_anterior(run_anterior)
+        # "Treino iniciado" fica SOZINHO na linha (o enviar_logs_mongodb casa a linha exata);
+        # a identificação (run | NOVO/RETOMADA | commit | data) vai na linha seguinte — sem ela
+        # não dá p/ saber, lendo o log, onde uma run termina e a outra começa.
+        cabecalho = f"\n{'='*60}\nTreino iniciado\n{identificacao}\n{'='*60}\n"
 
         # Convenção de logs: treino.log (e o console) ficam ENXUTOS — é o que se lê durante a
         # execução. Telemetria p/ análise (Energia fim, Causa, linhas OCORRIDO) vai para
@@ -716,24 +764,32 @@ class CheckpointComLog(CheckpointCallback):
 
 
 def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bool = False,
-            bc_path: str = None):
+            bc_path: str = None, tag_run: str = None):
     print("Iniciando ambiente FNAF1...")
     print("ATENÇÃO: Deixe o jogo aberto e na tela inicial!")
     print("Dica: segure F12 a qualquer momento para pausar.\n")
-    # Lembrete: o .env é LOCAL por máquina (git-ignorado) — um `git pull` NÃO atualiza a fase.
-    # A fase LSTM abriu em 14/07/2026 (run 3): o gatilho do §2.7 do PACOTE disparou com a
-    # telemetria morte_anim_com_flag ≈ 0 (morre CEGO). Run 3 = RecurrentPPO + estados 13-14.
     if USAR_LSTM:
-        print("=" * 70)
         print("USAR_LSTM=True (codigo) -> RecurrentPPO (LSTM, hidden 128, 1 camada, critic_lstm).")
-        print("Fase run 3: LSTM + estados de idade da informacao (13-14) + BC recorrente.")
-        print("Pre-voo obrigatorio: python -m src.utils.testar_masking (offline).")
-        print("Com --bc RECORRENTE a transferencia e ~100% (ator+LSTM+cabecas); so o critico")
-        print("chega frio (por isso o warmup). Regua de metas no PACOTE_BC_ENTROPIA.md.")
-        print("=" * 70)
+        print("Pre-voo: python -m src.utils.testar_masking (offline). Com --bc RECORRENTE a")
+        print("transferencia e ~100% (ator+LSTM+cabecas); so o critico chega frio (warmup).")
     else:
-        print("[fase] USAR_LSTM=False (feedforward) — a run 3 usa LSTM;"
-              " troque a constante USAR_LSTM em train.py se for intencional.")
+        print("USAR_LSTM=False (codigo) -> PPO feedforward.")
+
+    # Identidade da run: treino fresco cria (e a run anterior vira prefixo do histórico);
+    # retomada reusa o run.json. Retomada SEM run.json (checkpoint de antes desta convenção)
+    # também cria — o nome passa a valer dali em diante.
+    run_anterior = _ler_run()
+    if carregar_modelo and run_anterior:
+        run = run_anterior
+        if tag_run:
+            print(f"[run] --nome ignorado na retomada: a run continua '{run['nome']}'")
+    else:
+        run = _criar_run(tag_run)
+    origem = f"RETOMADA de {carregar_modelo}" if carregar_modelo else (
+        f"NOVO (BC: {bc_path})" if bc_path else "NOVO")
+    identificacao = (f"run: {run['nome']} | {origem} | commit {_versao_codigo()} | "
+                     f"{datetime.now():%Y-%m-%d %H:%M}")
+    print(f"[run] {identificacao}\n")
     time.sleep(3)
 
     env_base = DummyVecEnv([lambda: FNAFEnv()])
@@ -757,7 +813,7 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
 
     # Decisão 7 — memória: USAR_LSTM troca PPO (feedforward, controle do A/B) por RecurrentPPO
     # (LSTM, reusando o MultimodalExtractor). Só o ALGORITMO muda — recompensa/VecNormalize/gamma/
-    # noite/schedules iguais ao controle. Ligar via FNAF_USAR_LSTM=1 no .env.
+    # noite/schedules iguais ao controle. Alternar pela constante USAR_LSTM (código, não .env).
     Modelo   = RecurrentPPO if USAR_LSTM else PPO
     politica = "MultiInputLstmPolicy" if USAR_LSTM else "MultiInputPolicy"
     if carregar_modelo and os.path.exists(carregar_modelo):
@@ -781,9 +837,6 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
             ent_coef=ENT_INICIO,               # valor inicial — o ControladorEntropia assume dali
             target_kl=TARGET_KL,               # bundle: freio extra contra colapso de entropia
             verbose=0,
-            # Subpasta própria: a raiz de logs/ fica só com treino.log + desyncs.log.
-            # `tensorboard --logdir logs` continua funcionando (o TB varre subpastas).
-            tensorboard_log=f"{PASTA_LOGS}/tensorboard",
             device="auto",
         )
         # BC warmstart (opcional): inicializa a percepção a partir de um checkpoint (modelo de
@@ -802,6 +855,11 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     # lê modelo.n_steps/batch_size (mostra o valor REAL em uso, herdado do checkpoint se for retomada).
     modelo.n_epochs  = N_EPOCHS
     modelo.target_kl = TARGET_KL
+    # Tensorboard em logs/tensorboard/<nome da run> — logger explícito em vez do automático do
+    # SB3 (que nomeava 'RecurrentPPO_N' e abria pasta nova a cada treino fresco, sem dizer qual
+    # run era qual). Retomada escreve na MESMA pasta; o eixo de steps continua (num_timesteps).
+    # Refeito também após o load: o _custom_logger não é salvo no .zip.
+    modelo.set_logger(configure_logger_sb3(f"{PASTA_TB}/{run['nome']}", ["tensorboard"]))
     print(f"[hparams] n_steps={modelo.n_steps} batch={modelo.batch_size} n_epochs={N_EPOCHS} "
           f"target_kl={TARGET_KL} clip_reward={CLIP_REWARD} peso_energia={PESO_ENERGIA} "
           f"peso_info={PESO_INFO} | "
@@ -820,7 +878,9 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     # log_callback ANTES do checkpoint na lista: assim, no step do save, o contador de episódio
     # já está atualizado quando CheckpointComLog imprime o contexto.
     # rotacionar em treino FRESCO: arquiva os logs da run anterior p/ análises não misturarem runs
-    log_callback = LogCallback(log_steps=log_steps, rotacionar=carregar_modelo is None)
+    log_callback = LogCallback(log_steps=log_steps, rotacionar=carregar_modelo is None,
+                               run_anterior=(run_anterior or {}).get("nome"),
+                               identificacao=identificacao)
     checkpoint = CheckpointComLog(
         save_freq=10_000,
         save_path=PASTA_MODELOS,
