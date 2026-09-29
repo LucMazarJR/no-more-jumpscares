@@ -118,37 +118,76 @@ def modo_bc():
         treinar_bc(caminhos)
 
 
-def modo_jogar():
-    """Roda o modelo treinado em modo avaliação (sem aprender, determinístico).
+USO_JOGAR = ("python main.py jogar [--modelo <zip>] [--estocastico] [--noite N] "
+              "[--episodios K] [--ablacao imagem|estados]")
 
-    Decisão 5 (ablação da CNN): com `--ablacao imagem` ou `--ablacao estados`, zera aquele
-    ramo da observação antes do predict. Se zerar a IMAGEM quase não derrubar a sobrevivência,
-    a CNN não está contribuindo; se zerar os ESTADOS derrubar muito, a política depende deles.
-    Compare a taxa de vitória + sobrevivência média vs. o run cheio (sem flag)."""
+
+def _resumo_avaliacao(eps: list[dict]) -> list[str]:
+    """Linhas de resumo POR NOITE: vitórias, sobrevivência mediana, causas e ações/min."""
+    from collections import Counter
+    from statistics import median
+    linhas = []
+    for noite in sorted({e["noite"] for e in eps}):
+        grupo = [e for e in eps if e["noite"] == noite]
+        v = sum(1 for e in grupo if e["resultado"] == "VITORIA")
+        causas = ", ".join(f"{c} {n}" for c, n in Counter(e["causa"] for e in grupo).most_common(3))
+        linhas.append(
+            f"Noite {noite}: vitórias {v}/{len(grupo)} ({100 * v / len(grupo):.0f}%) | "
+            f"sobrev mediana {median(e['tempo'] for e in grupo):.0f}s | "
+            f"ações/min {sum(e['acoes_min'] for e in grupo) / len(grupo):.1f} | {causas}")
+    return linhas
+
+
+def modo_jogar():
+    """Avalia um modelo SEM aprender (medições da Fase 1 em docs/ESTADO_ATUAL.md).
+
+      --modelo <zip>   modelo a avaliar (default: o checkpoint mais avançado de modelos/).
+                       Aceita o próprio modelos/fnaf_bc.zip → mede o BC PURO, sem RL.
+      --estocastico    amostra a ação (como no TREINO) em vez do argmax. Use p/ comparar com
+                       as taxas de vitória dos logs de treino, que são estocásticas.
+      --noite N        mira a noite N (exige FNAF_RESET_METODO=continue): morrer na N → Continue.
+      --episodios K    para após K episódios na noite alvo (ou K no total, sem --noite).
+      --ablacao imagem|estados  zera aquele ramo da observação antes do predict (Decisão 5):
+                       se zerar a IMAGEM não derruba a vitória, a CNN não está contribuindo.
+
+    Cada episódio vai p/ logs/analise/avaliacoes.log (com a configuração no cabeçalho) e o
+    desyncs da avaliação p/ logs/analise/avaliacoes_desyncs.log — nada disso se mistura aos
+    logs de TREINO. Ctrl+C encerra e imprime o resumo por noite."""
+    from datetime import datetime
+
     import numpy as np
 
-    ablacao = None
-    if "--ablacao" in sys.argv:
-        i = sys.argv.index("--ablacao")
-        ablacao = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
-        if ablacao not in ("imagem", "estados"):
-            print("Uso: python main.py jogar [--ablacao imagem|estados]")
-            return
+    from src.environment.fnaf_env import RESET_METODO
 
-    caminho = encontrar_ultimo_modelo()
-    if not caminho:
-        print("Nenhum modelo encontrado em modelos/. Treine primeiro: python main.py treino")
+    ablacao = _valor_flag("--ablacao")
+    if "--ablacao" in sys.argv and ablacao not in ("imagem", "estados"):
+        print("Uso:", USO_JOGAR)
         return
+    estocastico = "--estocastico" in sys.argv
+    noite_alvo = int(_valor_flag("--noite")) if _valor_flag("--noite") else None
+    max_eps = int(_valor_flag("--episodios")) if _valor_flag("--episodios") else None
 
-    # Decisão 7: USAR_LSTM=True carrega RecurrentPPO e propaga o estado da LSTM (igual ao treino).
-    from src.agent.train import USAR_LSTM as usar_lstm
-    print(f"Carregando modelo ({'LSTM' if usar_lstm else 'PPO'}): {caminho}")
-    if ablacao:
-        print(f">>> ABLAÇÃO (Decisão 5): ramo '{ablacao}' ZERADO na observação <<<")
+    caminho = _valor_flag("--modelo") or encontrar_ultimo_modelo()
+    if not caminho or not os.path.exists(caminho):
+        print(f"Modelo não encontrado: {caminho}. Treine primeiro: python main.py treino")
+        return
+    if noite_alvo and RESET_METODO != "continue":
+        print(f"[aviso] --noite {noite_alvo} exige FNAF_RESET_METODO=continue no .env "
+              f"(atual: {RESET_METODO}) — toda morte volta p/ a Noite 1.")
+
+    # USAR_LSTM=True carrega RecurrentPPO e propaga o estado da LSTM (igual ao treino).
+    from src.agent.train import USAR_LSTM as usar_lstm, _versao_codigo
+    config = (f"modelo {caminho} | {'LSTM' if usar_lstm else 'PPO'} | "
+              f"{'estocástico' if estocastico else 'determinístico'} | "
+              f"noite alvo {noite_alvo or '-'} | ablação {ablacao or '-'} | "
+              f"commit {_versao_codigo()} | {datetime.now():%Y-%m-%d %H:%M}")
+    print(f"Avaliação: {config}")
     # Sem VecNormalize aqui de propósito: o treino normaliza só a recompensa
     # (norm_obs=False), então a política vê a observação crua igual no treino.
-    # As stats de normalização só importam para retomar o treino, não para jogar.
     env = FNAFEnv()
+    env._log_desyncs_path = "logs/analise/avaliacoes_desyncs.log"
+    if noite_alvo:
+        env.noite_desejada = noite_alvo
     if usar_lstm:
         from sb3_contrib import RecurrentPPO
         modelo = RecurrentPPO.load(caminho, env=env)
@@ -156,17 +195,19 @@ def modo_jogar():
         from stable_baselines3 import PPO
         modelo = PPO.load(caminho, env=env)
 
-    episodio = 0
-    vitorias = 0
-    tempo_total = 0.0
+    os.makedirs("logs/analise", exist_ok=True)
+    log = open("logs/analise/avaliacoes.log", "a", encoding="utf-8")
+    log.write(f"\n{'=' * 60}\nAvaliação iniciada\n{config}\n{'=' * 60}\n")
+
+    eps: list[dict] = []
     try:
-        while True:
-            episodio += 1
+        while max_eps is None or sum(
+                1 for e in eps if noite_alvo is None or e["noite"] == noite_alvo) < max_eps:
             obs, _ = env.reset()
             terminado = truncado = False
-            recompensa_total = 0.0
             info = {}
-            lstm_states = None                          # estado da LSTM (Decisão 7)
+            n_acoes = 0
+            lstm_states = None                          # estado da LSTM
             ep_start = np.ones((1,), dtype=bool)        # sinaliza início → a LSTM zera o estado
 
             while not (terminado or truncado):
@@ -176,37 +217,47 @@ def modo_jogar():
                     obs_pred[ablacao] = np.zeros_like(obs[ablacao])
                 if usar_lstm:
                     acao, lstm_states = modelo.predict(
-                        obs_pred, state=lstm_states, episode_start=ep_start, deterministic=True)
+                        obs_pred, state=lstm_states, episode_start=ep_start,
+                        deterministic=not estocastico)
                     ep_start = np.zeros((1,), dtype=bool)
                 else:
-                    acao, _ = modelo.predict(obs_pred, deterministic=True)
-                obs, recompensa, terminado, truncado, info = env.step(int(acao))
-                recompensa_total += recompensa
+                    acao, _ = modelo.predict(obs_pred, deterministic=not estocastico)
+                obs, _, terminado, truncado, info = env.step(int(acao))
+                if info.get("acao_nome", "nada") != "nada":
+                    n_acoes += 1
 
             if info.get("interrompido"):
                 resultado = "INTERROMPIDO"
             elif info.get("morreu"):
                 resultado = "MORTE"
-            elif terminado:
+            elif info.get("vitoria"):
                 resultado = "VITORIA"
-                vitorias += 1
             else:
                 resultado = "TRUNCADO"
-
-            tempo_total += info.get("tempo", 0.0)
-            print(
-                f"Ep {episodio:3d} | {resultado:12s} | "
-                f"sobrev {info.get('tempo', 0.0):5.0f}s ({info.get('passos', 0):4d}p) | "
-                f"rec {recompensa_total:7.1f} | "
-                f"vitórias {vitorias}/{episodio} méd {tempo_total/episodio:.0f}s"
-            )
+            tempo = info.get("tempo", 0.0)
+            ep = {"noite": info.get("noite", 1), "resultado": resultado, "tempo": tempo,
+                  "passos": info.get("passos", 0), "causa": info.get("causa") or "-",
+                  "energia": info.get("energia", 0.0),
+                  "acoes_min": n_acoes / (tempo / 60) if tempo > 0 else 0.0}
+            eps.append(ep)
+            linha = (f"Ep {len(eps):3d} | Noite {ep['noite']} | {resultado:12s} | "
+                     f"sobrev {tempo:5.0f}s ({ep['passos']:4d}p) | energia {ep['energia']:5.1f}% | "
+                     f"ações/min {ep['acoes_min']:5.1f} | causa {ep['causa']}")
+            print(linha)
+            log.write(linha + "\n")
+            log.flush()
     except KeyboardInterrupt:
-        tag = f" [ablação: {ablacao}]" if ablacao else ""
-        media = tempo_total / episodio if episodio else 0.0
-        print(f"\nAvaliação encerrada{tag}. "
-              f"Vitórias: {vitorias}/{episodio} | Sobrevivência média: {media:.0f}s")
+        print("\nAvaliação interrompida (Ctrl+C).")
     finally:
         env.close()
+        if eps:
+            resumo = _resumo_avaliacao(eps)
+            print(f"\nResumo ({config}):")
+            for linha in resumo:
+                print("  " + linha)
+            log.write("Resumo:\n" + "".join(f"  {l}\n" for l in resumo))
+        log.write("Avaliação finalizada\n")
+        log.close()
 
 
 if __name__ == "__main__":
@@ -222,6 +273,7 @@ if __name__ == "__main__":
         modo_bc()
     else:
         print(f"Modo desconhecido: {modo}")
-        print("Use: python main.py teste | python main.py treino [--novo] [--bc <zip>] | "
-              "python main.py jogar [--ablacao imagem|estados] | "
+        print("Use: python main.py teste | "
+              "python main.py treino [--novo] [--bc <zip>] [--nome <tag>] | "
+              f"{USO_JOGAR} | "
               "python main.py bc [dataset.json ...]  (sem args: pega dados/*/dataset.json)")
