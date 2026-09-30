@@ -123,7 +123,8 @@ USO_JOGAR = ("python main.py jogar [--modelo <zip>] [--estocastico] [--noite N] 
 
 
 def _resumo_avaliacao(eps: list[dict]) -> list[str]:
-    """Linhas de resumo POR NOITE: vitórias, sobrevivência mediana, causas e ações/min."""
+    """Linhas de resumo POR NOITE: vitórias, sobrevivência mediana, ações/min, s/step e causas.
+    O s/step importa ao comparar PCs: o jogo é em tempo real, step mais lento = agente mais lento."""
     from collections import Counter
     from statistics import median
     linhas = []
@@ -134,7 +135,9 @@ def _resumo_avaliacao(eps: list[dict]) -> list[str]:
         linhas.append(
             f"Noite {noite}: vitórias {v}/{len(grupo)} ({100 * v / len(grupo):.0f}%) | "
             f"sobrev mediana {median(e['tempo'] for e in grupo):.0f}s | "
-            f"ações/min {sum(e['acoes_min'] for e in grupo) / len(grupo):.1f} | {causas}")
+            f"ações/min {sum(e['acoes_min'] for e in grupo) / len(grupo):.1f} | "
+            f"s/step {sum(e['tempo'] for e in grupo) / max(1, sum(e['passos'] for e in grupo)):.2f} | "
+            f"{causas}")
     return linhas
 
 
@@ -180,6 +183,7 @@ def modo_jogar():
     config = (f"modelo {caminho} | {'LSTM' if usar_lstm else 'PPO'} | "
               f"{'estocástico' if estocastico else 'determinístico'} | "
               f"noite alvo {noite_alvo or '-'} | ablação {ablacao or '-'} | "
+              f"PC {os.getenv('PC') or '?'} | "
               f"commit {_versao_codigo()} | {datetime.now():%Y-%m-%d %H:%M}")
     print(f"Avaliação: {config}")
     # Sem VecNormalize aqui de propósito: o treino normaliza só a recompensa
