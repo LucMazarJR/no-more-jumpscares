@@ -114,14 +114,18 @@ Todas saem com `jogar`, que não aprende e grava em `logs/analise/avaliacoes.log
 
 | # | Comando | Custo | Decide |
 |---|---|---|---|
-| M1 | `python main.py jogar --modelo modelos/fnaf_bc.zip --estocastico --noite 1 --episodios 20` | ~3,5 h | Mede o **BC puro**, sem RL, na mesma dinâmica de reset da run 4 (alvo N1; cada vitória rende 1 ep de N2, ~10 no total). Se a N1 ficar em ≈50%, está provado que o RL não agregou nada e a Fase 3 se justifica. 20 eps separam 50% de ≤25%, mas não de 40%; use também a sobrevivência mediana. |
-| M2 | `python main.py jogar --modelo modelos/fnaf_bc.zip --estocastico --episodios 20 --ablacao imagem` | ~3 h | Se nada muda, a CNN (84×84 da janela inteira) não carrega informação. Isso prioriza a Fase 2 e reabre o simulador em nível de estados com um argumento novo: se a política vive dos estados, o simulador transfere. |
+| M1 | `python main.py jogar --modelo modelos/fnaf_bc.zip --estocastico --noite 1 --episodios 20` | ~4 h | Mede o **BC puro**, sem RL, na mesma dinâmica de reset da run 4 (alvo N1; cada vitória rende 1 ep de N2, ~10 no total). Se a N1 ficar em ≈50%, está provado que o RL não agregou nada e a Fase 3 se justifica. 20 eps separam 50% de ≤25%, mas não de 40%; use também a sobrevivência mediana. |
+| M2 | `python main.py jogar --modelo modelos/fnaf_bc.zip --estocastico --noite 1 --episodios 20 --ablacao imagem` | ~4 h | Se nada muda, a CNN (84×84 da janela inteira) não carrega informação. Isso prioriza a Fase 2 e reabre o simulador em nível de estados com um argumento novo: se a política vive dos estados, o simulador transfere. |
 | M3 | `python scripts/taxa_acao.py` depois do M1 | offline | Compara ações/min do clone com as do humano (N1 ≈29, N2 ≈33, N3 ≈38). Se o clone agir muito menos, as próximas gravações usam o tick do agente. |
 | M4 | `python -m src.utils.sonda_captura --rotulo <situação> [--segurar-luz esq\|dir]` no escritório, na CAM 1C, na 2A e com luz acesa | ~15 min | Latência do `mss`, frames distintos/s, quanto a mediana de 3/5 reduz o ruído, fração de frames escuros (piscar). Define a rajada da Fase 2. |
 
-Para M1 e M2 no mesmo PC, rode em noites diferentes. Os checkpoints da run 4 estão no
-PC-LUCIANO; se forem trazidos, repita M1 com o checkpoint final dela para medir BC contra BC+RL
-diretamente.
+**Em blocos e em 2 PCs:** M1 e M2 podem ser feitos em blocos fixos de `--episodios 5` (≈1 h),
+inclusive em PCs diferentes. O passo a passo para o outro PC está em
+[HANDOFF_FASE1.md](HANDOFF_FASE1.md). A comparação M1 × M2 deve ser feita **dentro do mesmo PC**.
+Para juntar os blocos: `python scripts/resumo_avaliacoes.py <logs>` (separa por PC e soma).
+
+Os checkpoints da run 4 estão no PC-LUCIANO. Se existirem, repita o M1 com o checkpoint final
+dela para medir BC contra BC+RL diretamente, na mesma máquina.
 
 **Regras de decisão (registradas antes de medir):**
 - M1 com N1 ≥ 40% → o RL não agregou nada. Seguir para a Fase 3.

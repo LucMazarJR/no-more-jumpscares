@@ -24,6 +24,7 @@ logs separados por run, [ESTADO_ATUAL.md](ESTADO_ATUAL.md) como fonte única do 
 |---|---|---|
 | [ESTADO_ATUAL.md](ESTADO_ATUAL.md) | 🟢 vivo (set/2026) | **Fonte única do estado do projeto**: runs medidas, correções, lições, plano (Fases 1–3), pendências |
 | [ESTRATEGIA_DEMOS_E_PERCEPCAO.md](ESTRATEGIA_DEMOS_E_PERCEPCAO.md) | 🟢 vivo (set/2026) | **A nova estratégia**: medir antes (Fase 1), percepção robusta contra estática/piscar/movimentos súbitos (Fase 2), off-policy com demos + correções ao vivo (Fase 3) — porquês, runbook, riscos, glossário |
+| [HANDOFF_FASE1.md](HANDOFF_FASE1.md) | 🟡 transitório (set/2026) | **Prompt para o outro PC**: rodar as avaliações M1/M2 em blocos, pré-voo (hash do BC, .env, testes), regras e relatório |
 | [PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md) | 🟢 vivo (jul/2026) | Os mecanismos do pacote BC + entropia: estratégias, runbook gravação→BC→treino, glossário |
 | [REFERENCIA_HIPERPARAMETROS.md](REFERENCIA_HIPERPARAMETROS.md) | 🟢 vivo (jul/2026) | Consulta rápida: cada hiperparâmetro, valor atual, quando e como mexer |
 | [GUIA_CONCEITOS_E_FUNCIONAMENTO.md](GUIA_CONCEITOS_E_FUNCIONAMENTO.md) | 🟢 vivo (jul/2026) | Guia didático completo (~950 linhas): do "o que é RL" ao funcionamento de cada peça |
