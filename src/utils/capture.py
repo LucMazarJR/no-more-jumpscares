@@ -31,7 +31,12 @@ class GameCapture:
         regiao = {"top": 0, "left": 0, "width": 1920, "height": 1080}
         """
         if regiao is None:
-            monitor = self.sct.monitors[1]  # monitor principal
+            # Monitor PRIMÁRIO = origem (0,0), a mesma referência dos cliques do pyautogui e das
+            # coordenadas do .env. Não usa sct.monitors[1]: com 2 telas ele pode ser a outra
+            # (a da esquerda fica em x negativo), e a lista fica em cache se a config de telas
+            # mudar no meio da execução (ex.: trocar p/ só o HDMI dummy depois de começar).
+            largura, altura = pyautogui.size()
+            monitor = {"left": 0, "top": 0, "width": largura, "height": altura}
         else:
             monitor = regiao
 
