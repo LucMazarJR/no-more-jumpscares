@@ -12,6 +12,7 @@ Uso (de um PowerShell, na raiz do projeto, com o jogo FECHADO ou no menu):
     venv\\Scripts\\python scripts\\rodar_fase1.py                       # 4 rodadas: M1, M2, RL
     venv\\Scripts\\python scripts\\rodar_fase1.py --rodadas 3 --sem-rl
     venv\\Scripts\\python scripts\\rodar_fase1.py --ate 18:00           # não começa bloco que passe disso
+    venv\\Scripts\\python scripts\\rodar_fase1.py --blocos M1,RL,RL340  # curva BC → 190k → 340k
 
 Saídas: logs/analise/avaliacoes.log (resultados, lido pelo resumo_avaliacoes.py),
 logs/analise/fase1_blocos.txt (console de todos os blocos + tracebacks), debug/fase1_bloco_<n>.png.
@@ -42,6 +43,8 @@ PYTHON = os.path.join("venv", "Scripts", "python.exe")
 BC = os.path.join("modelos", "fnaf_bc.zip")
 BC_SHA256 = "74436089BB1AA395FB4D28FBA683FCF9558F3C152EFE8E1FD3F3B0E176DCFF70"
 RL = os.path.join("modelos", "pc_luciano_run4", "pc4_fnaf_ppo_190000_steps.zip")  # fim da run 4
+# Continuação da run 4 (10–11/ago, ~150k steps sem log): mede se o PPO seguiu subindo ou estagnou.
+RL340 = os.path.join("modelos", "pc_luciano_run4", "pc4_fnaf_ppo_340000_steps.zip")
 LOG = os.path.join("logs", "analise", "fase1_blocos.txt")
 TELA_CALIBRADA = (1920, 1080)    # monitor primário em que o .env deste PC foi calibrado
 JANELA_CALIBRADA = (312, 160)    # canto da janela do jogo em modo janela nessa tela
@@ -51,6 +54,7 @@ CONFIGS = {
     "M1": [BC],
     "M2": [BC, "--ablacao", "imagem"],
     "RL": [RL],
+    "RL340": [RL340],
 }
 
 
@@ -61,7 +65,7 @@ def registrar(msg: str) -> None:
         f.write(linha + "\n")
 
 
-def checar_ambiente(usar_rl: bool) -> list[str]:
+def checar_ambiente(ordem: list[str]) -> list[str]:
     erros = []
     if tuple(pyautogui.size()) != TELA_CALIBRADA:
         erros.append(f"monitor primário em {tuple(pyautogui.size())}, mas o .env foi calibrado em "
@@ -73,8 +77,11 @@ def checar_ambiente(usar_rl: bool) -> list[str]:
     with open(BC, "rb") as f:
         if hashlib.sha256(f.read()).hexdigest().upper() != BC_SHA256:
             erros.append(f"hash do {BC} diferente do BC da Fase 1.")
-    if usar_rl and not os.path.exists(RL):
-        erros.append(f"{RL} não existe (use --sem-rl).")
+    # Todo modelo da fila precisa existir ANTES de começar: um checkpoint faltando só quebraria
+    # horas depois, no bloco dele, com a máquina sozinha.
+    for nome in dict.fromkeys(ordem):
+        if not os.path.exists(CONFIGS[nome][0]):
+            erros.append(f"{CONFIGS[nome][0]} não existe (bloco {nome}).")
     return erros
 
 
@@ -150,11 +157,19 @@ def main() -> None:
     ap.add_argument("--rodadas", type=int, default=4, help="rodadas de (M1, M2[, RL])")
     ap.add_argument("--episodios", type=int, default=5)
     ap.add_argument("--sem-rl", action="store_true", help="só M1 e M2")
+    ap.add_argument("--blocos", help=f"ordem de UMA rodada, separada por vírgula (opções: "
+                                     f"{', '.join(CONFIGS)}); ex.: M1,RL,RL340")
     ap.add_argument("--ate", help="HH:MM: não começa bloco que termine depois disso")
     args = ap.parse_args()
 
     os.makedirs("debug", exist_ok=True)
-    ordem = ["M1", "M2"] + ([] if args.sem_rl else ["RL"])
+    if args.blocos:
+        ordem = [b.strip() for b in args.blocos.split(",") if b.strip()]
+        desconhecidos = [b for b in ordem if b not in CONFIGS]
+        if desconhecidos:
+            sys.exit(f"[ERRO] blocos desconhecidos: {desconhecidos} (opções: {', '.join(CONFIGS)})")
+    else:
+        ordem = ["M1", "M2"] + ([] if args.sem_rl else ["RL"])
     fila = ordem * args.rodadas
     limite = None
     if args.ate:
@@ -163,7 +178,7 @@ def main() -> None:
         if limite <= datetime.now():
             limite += timedelta(days=1)
 
-    erros = checar_ambiente(not args.sem_rl)
+    erros = checar_ambiente(ordem)
     if erros:
         for e in erros:
             print("[ERRO]", e)
