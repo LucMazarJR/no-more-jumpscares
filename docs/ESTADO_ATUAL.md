@@ -134,25 +134,34 @@ Percepção limpa em todos os blocos (~0,3 resync de câmera e ~0,1 falha de por
 
 ### Fase 1 — medições: CONCLUÍDA
 
-M1, M2, M3 e a comparação BC × RL 190k × RL 340k estão na §2.2. Falta só o **M4** (sonda de
-captura), que precisa de alguém no PC para levar o jogo a cada situação:
+M1, M2, M3 e a comparação BC × RL 190k × RL 340k estão na §2.2.
 
-```
-python -m src.utils.sonda_captura --rotulo escritorio
-python -m src.utils.sonda_captura --rotulo cam_1c                     (com a CAM 1C aberta)
-python -m src.utils.sonda_captura --rotulo cam_2a                     (com a CAM 2A aberta)
-python -m src.utils.sonda_captura --rotulo luz_esq --segurar-luz esq
-```
+**M4 — sonda de captura (6/out, `debug/sonda_*.json`):**
+
+| Situação | Ruído cru → mediana de 5 | Frames distintos/s |
+|---|---|---|
+| CAM 1C | 13,4 → 8,4 (−38%) | 59 |
+| CAM 2A | 13,5 → 8,8 (−35%) | 58 |
+| Escritório, luz esquerda acesa | 0,4 → 0,1 (sem estática) | 2 |
+
+- Captura de ~14 ms por frame: uma rajada de 5 custa ~70 ms por step. Cabe.
+- **A estática é um problema só das câmeras.** No escritório a imagem é estável; a única variação
+  é a luz da porta, que é o sinal que os detectores usam.
+- O piscar ocasional da luz não apareceu nos ~0,9 s de captura. Pelo que o usuário observa no jogo,
+  a luz do escritório só varia com a luz da porta acesa. Não é bloqueio.
+
+Conclusão: a rajada vale para ler as **câmeras**, e não compra nada para os detectores do escritório.
 
 ### Próximos passos, em ordem
 
-1. **M4** (~15 min, com você). Define o tamanho da rajada e se o `mss` basta.
-2. **Rajada de frames só nos detectores** (flags de ameaça, leitura de energia), atrás de uma
-   constante desligada por padrão. A imagem da CNN fica igual, então o BC atual continua válido.
-   Medir com o `jogar` numa noite: BC com e sem rajada, intercalados.
-3. **DQfD validado offline** só com as demos: tem que igualar o BC em acurácia na validação.
-4. **Treino do zero** com a observação nova (Fase 2 completa) e o DQfD (Fase 3), mais correções ao
-   vivo na N2 (HG-DAgger).
+1. **Percepção das câmeras**, começando pelo estágio do Foxy na CAM 1C, com a rajada de frames.
+   Ataca a parede da N2 (falta de informação). Validar com o `jogar` sobre o mesmo BC, antes de treinar.
+2. **DQfD validado offline** só com as demos: tem que igualar o BC em acurácia na validação.
+   Ataca o esquecimento visto no 340k.
+3. **Treino do zero** com a observação nova (Fase 2) e o DQfD (Fase 3), mais correções ao vivo na
+   N2 (HG-DAgger).
+
+O antigo passo "rajada só nos detectores" saiu: o M4 mostrou que o escritório não tem estática.
 
 Os porquês, o runbook, os riscos e o glossário estão em
 [ESTRATEGIA_DEMOS_E_PERCEPCAO.md](ESTRATEGIA_DEMOS_E_PERCEPCAO.md).
