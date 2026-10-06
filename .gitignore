@@ -231,3 +231,5 @@ dados/
 .claude/settings.local.json
 
 backups/
+# Saídas de ferramentas de diagnóstico (sonda_captura etc.): transientes, ficam só na máquina.
+debug/*.json
