@@ -224,7 +224,7 @@ venv\Scripts\python -m src.utils.sonda_captura --rotulo luz_esq --segurar-luz es
 
 - M1 e M2 levam ~4 h cada (~11 min por episódio de N1, contando o de N2 que vem de brinde).
   Podem ser feitos em blocos (`--episodios 5` ≈ 1 h), inclusive em PCs diferentes: ver
-  [HANDOFF_FASE1.md](HANDOFF_FASE1.md). Junte os blocos com `python scripts/resumo_avaliacoes.py`.
+  [historico/HANDOFF_FASE1.md](historico/HANDOFF_FASE1.md). Junte os blocos com `python scripts/resumo_avaliacoes.py`.
 - O resumo por noite sai no terminal e em `logs/analise/avaliacoes.log`.
 - A sonda grava `debug/sonda_<rotulo>.json` e imagens para comparar a olho: frame cru, mediana e
   máximo.

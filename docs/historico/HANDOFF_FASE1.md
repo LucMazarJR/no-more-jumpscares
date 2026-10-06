@@ -1,5 +1,8 @@
 # Handoff — Fase 1 no outro PC (avaliações em blocos)
 
+> 📦 **HISTÓRICO** — a Fase 1 terminou em 6/out/2026. Os resultados estão em
+> [../ESTADO_ATUAL.md](../ESTADO_ATUAL.md) §2.2 e §5. Os caminhos de links abaixo são da época.
+
 > **Este documento é um PROMPT** para o agente que roda no outro PC (o de treino). Leia inteiro
 > antes de agir. Idioma do projeto: **português**. É **transitório**: quando a Fase 1 acabar, ele
 > vai para `docs/historico/`.

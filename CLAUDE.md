@@ -9,6 +9,9 @@ Este arquivo guarda só o que é permanente. Nada de "fase atual" aqui.
 
 ## Comandos canônicos (NÃO renomear/mover os alvos)
 
+Guia de uso para o dia a dia (o que rodar para cada tarefa e por quê):
+[docs/GUIA_COMANDOS.md](docs/GUIA_COMANDOS.md).
+
 | Comando | O que faz |
 |---|---|
 | `python main.py teste` | valida reset/captura/observação (jogo aberto) |
