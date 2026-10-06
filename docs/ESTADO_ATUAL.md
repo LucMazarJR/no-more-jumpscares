@@ -33,10 +33,14 @@ Steps a ~0,9 s cada.
 | `2026-07-06_run2_ppo_bc_curriculo` | 6–14/jul | PPO + BC ff + currículo | 231k | 60% no início → **0–8%** depois da promoção (esquecimento) | **3/653 (0,5%)** |
 | `2026-07-16_run3_rppo_bc_parcial` | 16–22/jul | RecurrentPPO + BC ff (só o extractor transfere) | 175k | 0–13% (cold-start, H 2,65→2,07) | 15 eps |
 | `2026-08-05_run4_rppo_bc_recorrente` | 5–7/ago | RecurrentPPO + BC recorrente (100% transferido) | 188k | **51,6%** (128/248), plana | **3/127, todas por apagão (sorte)** |
-| continuação da run 4 (sem log) | 10–11/ago | a mesma, retomada | 190k → 340k | só checkpoints (ver §2.2) | — |
+| continuação da run 4 | 10–11/ago | a mesma, retomada, com currículo | 190k → 340k (154k) | 25/38 (66%); promovida à N2 após ~60 eps | **6/369 (1,6%), todas por apagão** |
 
-A continuação de 10–11/ago deixou checkpoints até 340k em `modelos/pc_luciano_run4/`, mas os logs
-dela se perderam junto com a cópia antiga do projeto. Não se sabe se rodou com currículo ou âncora.
+**A continuação de 10–11/ago** (log recuperado em
+`logs/analise/historico/2026-08-10_run4_continuacao_detalhado.log`): o currículo promoveu o agente
+para a N2 logo no início, e ele passou 369 episódios lá. Ao longo deles, as mortes migraram de
+animatrônico para **energia** (de 12% para 71% por bloco de 75 eps) e a sobrevivência mediana subiu
+de 6,0 para 7,0 min, sem nenhuma vitória gerida. É o mecanismo por trás da degradação do checkpoint
+de 340k medida na §2.2: treinar a N2 sem informação ensinou a defender mais, não na hora certa.
 
 ### 2.1 Detalhes da run 4 que importam
 
@@ -91,7 +95,7 @@ Percepção limpa em todos os blocos (~0,3 resync de câmera e ~0,1 falha de por
 | "O PPO está estável" (HANDOFF §7) | Verdade (approx_kl 0,02–0,05), mas não quer dizer que aprende. |
 | "Mais amostra de N2 basta" (premissa da run 5) | Runs 1 e 2: centenas de eps de N2 com ~0 vitórias. O 340k: mais treino em N2 virou gasto de energia, não vitória. |
 | "Ficar às cegas custa −0,6 contínuo no Φ" (PACOTE §2.3) | Custa −0,6 uma vez: o shaping telescopa. |
-| "A run 5 não rodou" (set/2026) | Algo rodou de 190k a 340k em 10–11/ago, sem log. Ver §2.2. |
+| "A run 5 não rodou" (set/2026) | A run 4 foi retomada de 190k a 340k em 10–11/ago, com currículo. Log recuperado; ver §2. |
 | "O clone age menos que o humano" (hipótese de set/2026) | Ele age mais (~41 × ~29 ações/min). |
 | "O BC dá ~50–68% na N1" | Medido intercalado: 43% (15/35). |
 
@@ -188,4 +192,6 @@ Os porquês, o runbook, os riscos e o glossário estão em
   estiver dominada.
 - **`morte_animatronico` é genérico** (não separa Foxy de Freddy). Melhoria de telemetria a
   considerar se isso bloquear uma decisão da Fase 2.
-- `docs/HANDOFF_FASE1.md` pode ir para `docs/historico/`: a Fase 1 acabou.
+- **Fixtures de teste faltando no PC pc4:** as imagens `debug/quadro_*.png` (git-ignoradas) não
+  estão aqui, então o `testar_deteccao_ameaca` só roda 2 dos 15 casos ("Rosto: 0/0"). Copiar do
+  outro PC.
