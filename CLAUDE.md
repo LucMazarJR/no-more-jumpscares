@@ -73,3 +73,11 @@ logs/tensorboard/<run>/               uma pasta por run; _pre_pacote/ = runs ant
   - Refutar com dados uma afirmação de doc ou comentário é resultado, não problema.
 - **Setup de 2 PCs** (prefixo `PC=` nos logs). O merge de pesos entre linhagens foi DESCONTINUADO porque quebra a política.
 - **Idioma do projeto:** português (código, comentários, docs, logs).
+
+## Como trabalhar com o usuário neste projeto
+
+- **Retomada depois de uma pausa:** se faz tempo desde a última conversa sobre um assunto, antes
+  de pedir uma ação, recapitule em poucas linhas o conceito e o **porquê** daquele passo (o que ele
+  mede ou resolve e o que decide). Não presuma que o usuário lembra do raciocínio.
+- **Comandos para o usuário rodar:** escreva com `python ...`, não `venv\Scripts\python ...`. O
+  terminal dele já ativa o venv sozinho.
