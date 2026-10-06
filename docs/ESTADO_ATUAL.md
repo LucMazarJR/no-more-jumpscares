@@ -155,7 +155,8 @@ Conclusão: a rajada vale para ler as **câmeras**, e não compra nada para os d
 ### Próximos passos, em ordem
 
 1. **Percepção das câmeras**, começando pelo estágio do Foxy na CAM 1C, com a rajada de frames.
-   Ataca a parede da N2 (falta de informação). Validar com o `jogar` sobre o mesmo BC, antes de treinar.
+   Ataca a parede da N2 (falta de informação). Roteiro passo a passo:
+   [ROTEIRO_FOXY_CAM1C.md](ROTEIRO_FOXY_CAM1C.md).
 2. **DQfD validado offline** só com as demos: tem que igualar o BC em acurácia na validação.
    Ataca o esquecimento visto no 340k.
 3. **Treino do zero** com a observação nova (Fase 2) e o DQfD (Fase 3), mais correções ao vivo na
