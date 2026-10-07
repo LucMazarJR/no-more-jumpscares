@@ -9,8 +9,11 @@
 ## 0. Por que isso, e por que agora (recapitulação)
 
 - **A parede é a Noite 2:** 1 vitória em ~56 episódios, com qualquer modelo. O agente morre cedo,
-  com bateria sobrando, para um animatrônico que não aparece nas flags. Só Bonnie e Chica têm flag.
-- **O suspeito principal é o Foxy.** Ele mora na Pirate Cove (CAM 1C) e sai em estágios: cortina
+  com bateria sobrando, por `morte_animatronico`. **O log não diz qual animatrônico.** A flag de
+  ameaça (só Bonnie e Chica têm) só acende se o agente *viu* o animatrônico com a luz acesa, então
+  "morreu com a flag apagada" pode ser o Foxy ou o Freddy (sem flag) **ou** o Bonnie ou a Chica sem o
+  agente ter olhado. Por isso a Etapa 0 abaixo verifica quem mata antes de tudo.
+- **O suspeito principal é o Foxy** (inferência, não medição). Ele mora na Pirate Cove (CAM 1C) e sai em estágios: cortina
   fechada → espiando → fora da cortina → **cortina vazia** (está correndo até a porta esquerda
   AGORA). Saber o estágio é provavelmente a informação mais valiosa do jogo, e hoje o agente não tem.
 - **A estática das câmeras atrapalha a leitura.** A sonda (M4) mediu: a mediana de uma rajada de
@@ -20,6 +23,33 @@
 
 Fato do jogo a confirmar com os dados: na Noite 1 o Foxy quase não se move (a agressividade dele
 começa em 0 e só sobe de madrugada). As imagens dos estágios virão sobretudo das Noites 2 e 3.
+
+## Etapa 0 — Confirmar quem mata na Noite 2 (antes de construir qualquer coisa)
+
+**Por quê:** se quem mata for o Bonnie ou a Chica sem o agente olhar, o problema é o **uso da luz**,
+não o Foxy, e o detector da CAM 1C não resolveria a parede.
+
+**O jeito mais barato, sem código:** grave a tela enquanto o agente joga a N2 e veja o jumpscare de
+cada morte. Cada animatrônico tem o seu, e o do Foxy vem correndo pela porta esquerda.
+
+1. Abra a gravação de tela do Windows (Xbox Game Bar: **Win+Alt+R** inicia e para; ou o OBS, se
+   quiser gravar horas seguidas).
+2. Rode ~10 episódios mirando a N2 com o checkpoint que mais chega lá:
+   ```
+   python main.py jogar --modelo modelos/pc_luciano_run4/pc4_fnaf_ppo_190000_steps.zip --estocastico --noite 2 --episodios 10
+   ```
+3. Para cada morte na N2, anote quem fez o jumpscare e em que hora da noite. O `avaliacoes.log`
+   dá a sobrevivência de cada episódio, o que ajuda a achar o momento no vídeo.
+
+**Decide:**
+- maioria Foxy → seguir este roteiro;
+- maioria Bonnie/Chica → o problema é a disciplina de luz. O próximo passo muda (correções ao vivo
+  e demos de N2 focadas em checar as portas), e este roteiro fica para depois;
+- maioria Freddy → surpresa, porque ele deveria estar quase inativo na N2. Reveja a hipótese.
+
+Com ~10 mortes não dá para cravar uma porcentagem, mas dá para ver se um animatrônico domina.
+
+Registre o resultado no ESTADO_ATUAL (§6, "Quem mata na N2").
 
 ## Etapa 1 — Coletar imagens rotuladas da CAM 1C
 
