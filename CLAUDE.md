@@ -89,6 +89,10 @@ logs/tensorboard/<run>/               uma pasta por run; _pre_pacote/ = runs ant
 
 ## Como trabalhar com o usuário neste projeto
 
+- **Exceção ao "modo mentor" global** (`~/.claude/CLAUDE.md`): **neste projeto o Claude implementa**.
+  O usuário revisa as decisões, não o código. Explique as decisões e os trade-offs em poucas linhas
+  (o que muda, por quê e como foi validado), para ele poder aprovar ou vetar.
+
 - **Retomada depois de uma pausa:** se faz tempo desde a última conversa sobre um assunto, antes
   de pedir uma ação, recapitule em poucas linhas o conceito e o **porquê** daquele passo (o que ele
   mede ou resolve e o que decide). Não presuma que o usuário lembra do raciocínio.
