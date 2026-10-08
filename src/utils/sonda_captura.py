@@ -27,7 +27,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from src.environment.fnaf_env import (BOTAO_DOOR, COORDS, ROI_AMEACA, SOMBRA_REGIAO,
+from src.environment.fnaf_env import (BOTAO_DOOR, COORDS, JANELA_SOMBRA, ROI_AMEACA,
                                       WINDOW_TITLE)
 from src.utils.capture import GameCapture, melhor_janela, regiao_cliente
 
@@ -37,7 +37,7 @@ PASTA_SAIDA = Path("debug")
 # Regiões (left, top, larg, alt) em 1280x720 — as MESMAS que os detectores do env leem.
 REGIOES = {
     "frame_inteiro": (0, 0, REF_W, REF_H),
-    "vao_esquerdo":  SOMBRA_REGIAO,
+    "janela_bonnie": JANELA_SOMBRA,
     "roi_ameaca_esq": ROI_AMEACA["esquerdo"],
     "roi_ameaca_dir": ROI_AMEACA["direito"],
     "botao_porta_esq": BOTAO_DOOR["esquerdo"],

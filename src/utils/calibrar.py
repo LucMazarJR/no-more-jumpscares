@@ -147,34 +147,52 @@ def capturar_camera_aberta():
 
 def capturar_sombra(estado: str):
     """
-    Referência do vão da porta esquerda (Decisão 4) — recorte committado em referencias/sombra/.
-    Com a LUZ ESQUERDA acesa, rode com:
-      - 'presente': Bonnie ainda no vão (sombra — std baixo)
-      - 'vazio':    Bonnie saiu, corredor iluminado (std alto)
-    Captura a janela igual ao ambiente (redimensiona p/ 1280x720) e recorta SOMBRA_REGIAO.
-    Os dois juntos calibram LIMIAR_VAZIO (Bonnie ~9.2 < vazio ~11.65 → confirma corredor vazio).
+    Referências da JANELA do Bonnie (out/2026) — recortes committados em referencias/sombra/.
+    Segure a luz ESQUERDA com o mouse (a visão fica no extremo da porta, como a do agente) e rode:
+      - 'vazio':   luz acesa, Bonnie longe da porta (janela toda iluminada)
+      - 'sombra':  luz acesa, Bonnie na porta (silhueta na janela; porta aberta ou fechada)
+      - 'apagada': luz apagada
+    Captura igual ao ambiente (área cliente → 1280x720) e recorta JANELA_SOMBRA. Com os três
+    salvos, regenera mascara_borda.png e mascara_silhueta.png (gerar_mascaras_sombra) e mostra a
+    separação. Use quando a tela, a resolução ou a máquina mudarem.
     """
+    import numpy as np
     from pathlib import Path
     from src.utils.capture import melhor_janela, regiao_cliente
-    from src.environment.fnaf_env import SOMBRA_REGIAO, WINDOW_TITLE
+    from src.environment.fnaf_env import JANELA_SOMBRA, WINDOW_TITLE, gerar_mascaras_sombra
 
-    if estado not in ("presente", "vazio"):
-        print("uso: python -m src.utils.calibrar sombra [presente | vazio]")
+    estados = ("vazio", "sombra", "apagada")
+    if estado not in estados:
+        print("uso: python -m src.utils.calibrar sombra [vazio | sombra | apagada]")
         return
 
-    print(f"5 segundos para deixar a luz esquerda acesa, porta fechada, estado '{estado}'...")
+    print(f"5 segundos para deixar o jogo no estado '{estado}' (segurando a luz se for o caso)...")
     time.sleep(5)
 
     win = melhor_janela(WINDOW_TITLE)
     frame = cv2.resize(cap.capturar_tela(regiao_cliente(win)), (1280, 720))
-    left, top, w, h = SOMBRA_REGIAO
+    left, top, w, h = JANELA_SOMBRA
     recorte = cv2.cvtColor(frame[top:top + h, left:left + w], cv2.COLOR_BGR2GRAY)  # cinza, como as outras refs
 
     pasta = Path("src/utils/referencias/sombra")
     pasta.mkdir(parents=True, exist_ok=True)
-    caminho = pasta / f"{estado}.png"
+    caminho = pasta / f"janela_{estado}.png"
     cv2.imwrite(str(caminho), recorte)
-    print(f"Referência salva: {caminho}  ({recorte.shape[1]}x{recorte.shape[0]})  std={recorte.std():.2f}")
+    print(f"Referência salva: {caminho}  ({recorte.shape[1]}x{recorte.shape[0]})")
+
+    recortes = {e: cv2.imread(str(pasta / f"janela_{e}.png"), cv2.IMREAD_GRAYSCALE) for e in estados}
+    if any(r is None for r in recortes.values()):
+        faltam = [e for e, r in recortes.items() if r is None]
+        print(f"Faltam {faltam} para regenerar as máscaras.")
+        return
+    borda, silh = gerar_mascaras_sombra(recortes["vazio"], recortes["sombra"], recortes["apagada"])
+    cv2.imwrite(str(pasta / "mascara_borda.png"), borda.astype(np.uint8) * 255)
+    cv2.imwrite(str(pasta / "mascara_silhueta.png"), silh.astype(np.uint8) * 255)
+    print(f"Máscaras regeneradas: borda {int(borda.sum())} px, silhueta {int(silh.sum())} px")
+    for e, r in recortes.items():
+        print(f"  {e:8s} borda={r[borda].mean():5.1f}  silhueta={r[silh].mean():5.1f}")
+    print("Confira se a separação continua clara e se os limiares de fnaf_env.py "
+          "(LIMIAR_BORDA_ACESA, LIMIAR_SILHUETA_VAZIA) ficam no meio dos valores.")
 
 def capturar_coords():
     import pyautogui
@@ -209,4 +227,4 @@ if __name__ == "__main__":
         capturar_sombra(sys.argv[2] if len(sys.argv) > 2 else "")
     else:
         print(f"Argumento desconhecido: {sys.argv[1]}")
-        print("Uso: python -m src.utils.calibrar [morte | vitoria | menu | camera_aberta | sombra <presente|vazio>]")
+        print("Uso: python -m src.utils.calibrar [morte | vitoria | menu | camera_aberta | sombra <vazio|sombra|apagada>]")
