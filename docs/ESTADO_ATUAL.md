@@ -224,6 +224,13 @@ Os porquês, o runbook, os riscos e o glossário estão em
     antes de o corredor iluminar e o detector fica mudo (no monitor a luz ficava segurada); (B) o
     detector vê, mas a política, treinada com a flag errada, não usa. Para separar, o `jogar` agora
     imprime por episódio `luzE n (acesa x, silhueta y) | flagE z%` (commit `b65a167`).
+  - **8/out (mesmo teste, com telemetria): a hipótese A caiu.** Com a luz segurada, a cena sai
+    iluminada em 56% das capturas (662/1189 na N2; o resto é o frame de transição, ignorado) e a
+    silhueta foi vista 140 vezes. N2 segue em 1/20, sobrevivência mediana 321 s. Novo sinal
+    suspeito: a flag esquerda fica acesa em 61–92% dos steps, até na N1. Pode "grudar" (só apaga com
+    4 checagens de luz vendo o corredor vazio) ou a política pode ignorá-la. Próximo passo:
+    `jogar --trace` + `scripts/analisar_trace.py` para ver, step a step, o que acontece antes de
+    cada morte.
 - **O Freddy está inativo nas noites 1–2.** Conhecimento do jogo, não verificado neste ambiente.
 - **A rajada resolve a estática e o piscar.** Raciocínio sólido, não medido (M4).
 - **Por que o BC deu 68% em agosto e 43% agora.** Mesmo arquivo e mesmo código de ambiente.
