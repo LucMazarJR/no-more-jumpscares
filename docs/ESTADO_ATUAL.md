@@ -158,7 +158,12 @@ Conclusão: a rajada vale para ler as **câmeras**, e não compra nada para os d
 
 ### Próximos passos, em ordem
 
-1. **Percepção das câmeras**, começando pelo estágio do Foxy na CAM 1C, com a rajada de frames.
+0. **(7/out, passa na frente) A decisão de reabrir a porta esquerda.** O Bonnie causa 16 de 18 mortes
+   na N2, quase sempre depois de o agente fechar a porta certa e reabri-la. Separar detector ×
+   política com o `monitor` (§6) e, se for o detector, trocar a decisão "corredor vazio" de textura
+   em cinza para cor. Isso **não muda a observação**: dá para medir com o `jogar` sobre os modelos
+   atuais, sem treinar.
+1. **Percepção das câmeras** (adiada: o Foxy causou 1 de 18 mortes), começando pelo estágio do Foxy na CAM 1C, com a rajada de frames.
    Ataca a parede da N2 (falta de informação). Roteiro passo a passo:
    [ROTEIRO_FOXY_CAM1C.md](ROTEIRO_FOXY_CAM1C.md).
 2. **DQfD validado offline** só com as demos: tem que igualar o BC em acurácia na validação.
@@ -181,7 +186,18 @@ Os porquês, o runbook, os riscos e o glossário estão em
 
 ## 6. Hipóteses abertas (não provadas)
 
-- **Quem mata na N2.** "É o Foxy" é inferência; `morte_animatronico` não identifica o animatrônico.
+- ~~**Quem mata na N2.**~~ **Respondido em 7/out** (vídeo de 20 eps de N2 com o RL 190k, `noite alvo 2`):
+  **16 de 18 mortes foram do Bonnie**, 1 do Foxy, 1 da Chica. Padrão dominante: o agente **fecha a
+  porta esquerda certa, acende a luz e depois reabre** com o Bonnie ainda lá. O humano vê o Bonnie
+  normalmente com a porta fechada. A hipótese do Foxy caiu; a prioridade passa a ser o Bonnie.
+- **Por que o agente reabre a porta com o Bonnie lá.**
+  - Hipótese A (principal): o detector limpa a flag por engano. Com a porta fechada, ele decide
+    pela textura do vão **em cinza** (`LIMIAR_VAZIO = 11.0`, calibrado com só 2 imagens:
+    11,65 vazio × 9,24 Bonnie). O Bonnie é roxo, e em cinza pode se confundir com o corredor.
+  - Hipótese B: a flag está certa e a política abre para economizar energia (o shaping de energia
+    foi calibrado para "abrir com ameaça velha compensa").
+  - Teste que separa as duas: `python -m src.utils.monitor` ao vivo, porta fechada e luz acesa com o
+    Bonnie presente. Se o detector disser "vazio", é a A.
 - **O Freddy está inativo nas noites 1–2.** Conhecimento do jogo, não verificado neste ambiente.
 - **A rajada resolve a estática e o piscar.** Raciocínio sólido, não medido (M4).
 - **Por que o BC deu 68% em agosto e 43% agora.** Mesmo arquivo e mesmo código de ambiente.
