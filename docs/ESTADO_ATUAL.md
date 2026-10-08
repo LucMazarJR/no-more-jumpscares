@@ -159,10 +159,9 @@ Conclusão: a rajada vale para ler as **câmeras**, e não compra nada para os d
 ### Próximos passos, em ordem
 
 0. **(7/out, passa na frente) A decisão de reabrir a porta esquerda.** O Bonnie causa 16 de 18 mortes
-   na N2, quase sempre depois de o agente fechar a porta certa e reabri-la. Separar detector ×
-   política com o `monitor` (§6) e, se for o detector, trocar a decisão "corredor vazio" de textura
-   em cinza para cor. Isso **não muda a observação**: dá para medir com o `jogar` sobre os modelos
-   atuais, sem treinar.
+   na N2, quase sempre depois de o agente fechar a porta certa e reabri-la. **Causa achada e corrigida
+   no detector** (§6). Falta: validar ao vivo com o `monitor` e medir com o `jogar` na N2 sobre os
+   modelos atuais. A observação não mudou de formato, então não precisa treinar.
 1. **Percepção das câmeras** (adiada: o Foxy causou 1 de 18 mortes), começando pelo estágio do Foxy na CAM 1C, com a rajada de frames.
    Ataca a parede da N2 (falta de informação). Roteiro passo a passo:
    [ROTEIRO_FOXY_CAM1C.md](ROTEIRO_FOXY_CAM1C.md).
@@ -206,10 +205,16 @@ Os porquês, o runbook, os riscos e o glossário estão em
     (luz acendendo/apagando, animação da porta) somam ao longo do tempo. Bug reproduzido: no print 04 a
     textura dizia sombra presente (9,25) e a flag já estava limpa; ao abrir (print 05) o Bonnie estava lá.
     O detector de rosto (0,96 × 0,39) e a leitura da porta pela cor do botão funcionam.
-  - Correção proposta (não muda a observação; mede-se com o `jogar` nos modelos atuais):
-    luz acesa + textura baixa = sombra → **zera** a contagem de vazio e mantém a ameaça; luz acesa +
-    textura alta → limpar só com leituras **seguidas**; luz apagada → mantém. Limiar 11,0 está colado
-    no "vazio" (11,66): o meio é ~10,4; recalibrar com mais prints.
+  - **Corrigido (7/out, commit `116d117`).** A diferença entre frames reais do F8 mostrou que a sombra
+    é a **silhueta do Bonnie numa janela de vidro** ao lado da porta, que só a luz ilumina. O detector
+    passou a usar duas máscaras nessa janela (em `referencias/sombra/`):
+    borda do vidro, "a luz chegou ao corredor?" (6,5–9,5 escuro × 38–42 aceso); e silhueta, "o Bonnie
+    está lá?" (7,1–7,6 com ele × 47 vazio). A luz é lida da cena, então o frame em que o botão
+    acende antes do corredor não vira falso alarme, e a sombra **acende** a ameaça com a porta aberta
+    ou fechada. Lógica única em `decidir_bonnie` (env e monitor); teste com 13 casos, incluindo o
+    print 04 do bug. Recalibração: `python -m src.utils.calibrar sombra vazio|sombra|apagada`.
+  - **Falta medir o efeito no jogo:** o RL 190k na N2 (`jogar --noite 2 --episodios 20`), contra a
+    referência de 1 vitória em 20 noites e 16 de 18 mortes do Bonnie.
 - **O Freddy está inativo nas noites 1–2.** Conhecimento do jogo, não verificado neste ambiente.
 - **A rajada resolve a estática e o piscar.** Raciocínio sólido, não medido (M4).
 - **Por que o BC deu 68% em agosto e 43% agora.** Mesmo arquivo e mesmo código de ambiente.
