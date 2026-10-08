@@ -14,7 +14,7 @@ from pathlib import Path
 
 import cv2
 
-from src.environment.fnaf_env import FNAFEnv, LIMIAR_AMEACA, LIMIAR_VAZIO
+from src.environment.fnaf_env import FNAFEnv, LIMIAR_AMEACA, LIMIAR_VAZIO, decidir_bonnie
 
 DEBUG = Path("debug")
 REFS = Path("src/utils/referencias")
@@ -48,6 +48,43 @@ CASOS_SOMBRA = [
     ("presente", False),  # Bonnie no vão → NÃO confirma vazio
     ("vazio",    True),   # corredor iluminado → vazio confirmado
 ]
+
+
+# SEQUÊNCIAS do Bonnie (out/2026) — frames reais em debug/bonnie_porta/ (1280x720, git-ignorados).
+# Reproduzem o bug "fecha, reabre e morre": antes, a sombra não zerava a contagem de vazio, e picos
+# isolados de "sem sombra" somavam até limpar a flag com o Bonnie ainda na porta.
+#   01 = porta aberta, Bonnie visível (rosto)    02/06 = porta fechada, luz acesa, SOMBRA
+#   03 = porta fechada, luz APAGADA              07   = porta fechada, luz acesa, SEM sombra
+# (nome do caso, sequência de frames, estado esperado da flag no fim)
+CASOS_SEQUENCIA = [
+    ("vê o rosto",                         ["01", "01"], True),
+    ("picos isolados entre sombras (bug)", ["01", "01", "07", "02", "07", "06", "07", "02", "07", "06"], True),
+    ("luz apagada não confirma nada",      ["01", "01", "03", "03", "03", "03", "03"], True),
+    ("Bonnie saiu: sem sombra seguida",    ["01", "01", "07", "07", "07", "07"], False),
+]
+BONNIE_PORTA = DEBUG / "bonnie_porta"
+
+
+def _rodar_sequencias(env):
+    frames = {p.name[:2]: cv2.cvtColor(cv2.imread(str(p)), cv2.COLOR_BGR2GRAY)
+              for p in BONNIE_PORTA.glob("0*.png")}
+    ok = total = 0
+    for nome, seq, esperado in CASOS_SEQUENCIA:
+        if any(k not in frames for k in seq):
+            print(f"  [--]   {nome:36s} (frames ausentes em {BONNIE_PORTA}/)")
+            continue
+        ameaca, n_p, n_v = False, 0, 0
+        for k in seq:
+            g = frames[k]
+            ameaca, n_p, n_v, _ = decidir_bonnie(
+                ameaca, n_p, n_v, luz_acesa=env._luz_esq_visivel(g),
+                std_vao=env._sombra_no_vao(g, "esquerdo"), rosto=env._match_ameaca(g, "esquerdo"))
+        certo = ameaca == esperado
+        ok += certo
+        total += 1
+        print(f"  [{'OK' if certo else 'FAIL':4s}] {nome:36s} {'-'.join(seq):32s} "
+              f"flag={'AMEAÇA' if ameaca else 'limpa'} esperado={'AMEAÇA' if esperado else 'limpa'}")
+    return ok, total
 
 
 def _env():
@@ -113,10 +150,13 @@ def main() -> int:
     print("\nConfirmação de corredor vazio (limpa ameaça — std do vão):")
     ok_sombra, total_sombra = _rodar_sombra()
 
-    ok = ok_rosto + ok_sombra
-    total = total_rosto + total_sombra
+    print("\nSequências do Bonnie (decidir_bonnie sobre frames reais):")
+    ok_seq, total_seq = _rodar_sequencias(env)
+
+    ok = ok_rosto + ok_sombra + ok_seq
+    total = total_rosto + total_sombra + total_seq
     print(f"\nRosto: {ok_rosto}/{total_rosto}   Sombra: {ok_sombra}/{total_sombra}   "
-          f"Total: {ok}/{total}")
+          f"Sequências: {ok_seq}/{total_seq}   Total: {ok}/{total}")
     return 0 if total > 0 and ok == total else 1
 
 
