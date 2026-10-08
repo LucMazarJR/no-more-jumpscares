@@ -195,61 +195,87 @@ ROI_AMEACA = {"esquerdo": (0, 0, 420, 500), "direito": (700, 0, 580, 500)}
 # Mudar SÓ em treino fresco: VecNormalize/crítico ficam presos ao gamma antigo ao retomar.
 GAMMA = 0.997
 
-# Detecção do Bonnie à esquerda — estado HELD (Decisão 4). A "sombra" do Bonnie no vão é
-# escura IGUAL à luz apagada (ele PROJETA a sombra, e no escuro o vão também é escuro), então
-# NÃO dá p/ detectar presença direto nem separar do escuro. Em vez disso o estado de perigo só
-# muda por CONFIRMAÇÃO POSITIVA, senão MANTÉM o último valor:
-#   - rosto do Bonnie casado (porta aberta) ............ ameaca_esq = True  (achou o Bonnie)
-#   - corredor VAZIO iluminado (std do vão ALTO) ........ ameaca_esq = False (saiu → pode reabrir)
-#   - sombra/escuro (std baixo, sem rosto) ............. mantém (não dá p/ confirmar)
-# Assim some a dependência de detector de luz: no escuro nada confirma → mantém o estado, que
-# só foi setado se você VIU o Bonnie antes. std medido no vão (x290-480): vazio iluminado ≈
-# 11.65 ; Bonnie/escuro ≈ 9.0-9.3.
-SOMBRA_REGIAO = (290, 80, 190, 440)  # (left, top, larg, alt) em 1280x720 — vão da porta esq
-LIMIAR_VAZIO = 11.0       # std do vão ACIMA disto = corredor vazio iluminado confirmado
-DEBOUNCE_PRESENCA = 2     # frames de rosto seguidos p/ setar a ameaça (absorve estática)
-# Sombra do Bonnie (out/2026): com a luz ACESA, o vão liso (std baixo) é a sombra dele — prova de
-# que ele ainda está lá, inclusive com a porta FECHADA. Medido em debug/bonnie_porta/: sombra
-# 9,07–9,25 × sem sombra 11,66. Entre LIMIAR_SOMBRA e LIMIAR_VAZIO a leitura é ambígua → mantém.
-LIMIAR_SOMBRA = 10.0
-# Luz acesa NA IMAGEM, pelo brilho do botão LIGHT do painel esquerdo (1280x720). Decide pela
-# imagem, não por "o env segurou o botão": se a captura sair antes de a luz acender, o vão escuro
-# é idêntico à sombra (luz apagada 9,07 × sombra 9,25). Medido: acesa 145 × apagada 82.
-BOTAO_LUZ_ESQ = (36, 405, 38, 85)
-LIMIAR_LUZ_ACESA = 115.0
+# Detecção do Bonnie à esquerda — estado HELD (Decisão 4, refeita em out/2026).
+# Com a luz da porta esquerda acesa, a JANELA de vidro ao lado da porta fica iluminada e mostra a
+# SILHUETA do Bonnie quando ele está no corredor — com a porta aberta OU fechada (o vidro fica fora
+# da porta). Duas máscaras em referencias/sombra/, geradas por diferença entre frames reais
+# (gerar_mascaras_sombra; recalibrar com `python -m src.utils.calibrar sombra <estado>`):
+#   - BORDA:    pixels do vidro que acendem com a luz, com ou sem o Bonnie → "a luz chegou?".
+#               Lida da CENA, não do botão: no instante em que o botão LIGHT acende o corredor
+#               ainda está escuro, e essa transição virava falso alarme.
+#   - SILHUETA: pixels que escurecem quando o Bonnie está lá → "ele está lá?".
+# Medido nos frames do F8 do monitor (debug/quadros/, out/2026), brilho médio em 0–255:
+#   borda:    apagada/transição 6,5–9,5   × acesa 38–42
+#   silhueta: Bonnie 7,1–7,6 (sombra ou rosto) × corredor vazio 47
+# (Antes: desvio-padrão de um retângulo grande e quase todo escuro — 9,07 escuro × 9,24 sombra
+# × 11,66 vazio, separação frágil demais.)
+JANELA_SOMBRA = (359, 118, 152, 337)   # (left, top, larg, alt) em 1280x720 — onde as máscaras valem
+LIMIAR_BORDA_ACESA = 24.0              # borda acima disto = a luz chegou ao corredor
+LIMIAR_SILHUETA_VAZIA = 27.0           # silhueta acima disto (com luz) = corredor vazio
+DEBOUNCE_PRESENCA = 2     # leituras de presença (rosto ou silhueta) p/ setar a ameaça
+_PASTA_SOMBRA = Path(__file__).parent.parent / "utils" / "referencias" / "sombra"
+_cache_mascaras: list = []
 
 
-def decidir_bonnie(ameaca: bool, n_presenca: int, n_vazio: int, luz_acesa: bool,
-                   std_vao: float, rosto: float) -> tuple[bool, int, int, bool]:
+def gerar_mascaras_sombra(vazio: np.ndarray, sombra: np.ndarray, apagada: np.ndarray,
+                          dif_min: int = 25) -> tuple[np.ndarray, np.ndarray]:
+    """Máscaras (borda, silhueta) a partir de 3 recortes cinza da JANELA_SOMBRA: luz acesa sem o
+    Bonnie, luz acesa com a sombra dele, e luz apagada. Pura."""
+    v, s, a = (x.astype(np.int16) for x in (vazio, sombra, apagada))
+    borda = ((v - a) > dif_min) & ((s - a) > dif_min)   # acende com a luz nos dois casos
+    silhueta = (v - s) > dif_min                         # escurece quando o Bonnie está lá
+    return borda, silhueta
+
+
+def _mascaras_sombra():
+    """(borda, silhueta) booleanas, lidas uma vez de referencias/sombra/. None se faltarem."""
+    if not _cache_mascaras:
+        b = cv2.imread(str(_PASTA_SOMBRA / "mascara_borda.png"), cv2.IMREAD_GRAYSCALE)
+        s = cv2.imread(str(_PASTA_SOMBRA / "mascara_silhueta.png"), cv2.IMREAD_GRAYSCALE)
+        _cache_mascaras.append(None if b is None or s is None else (b > 127, s > 127))
+    return _cache_mascaras[0]
+
+
+def ler_janela_sombra(frame_cinza: np.ndarray) -> tuple[float, float] | None:
+    """(brilho da borda, brilho da silhueta) na JANELA_SOMBRA de um frame 1280x720 cinza.
+    None se as máscaras não existirem ou o frame não tiver o enquadramento de referência. Pura."""
+    mascaras = _mascaras_sombra()
+    if mascaras is None:
+        return None
+    left, top, w, h = JANELA_SOMBRA
+    reg = frame_cinza[top:top + h, left:left + w]
+    if reg.shape != mascaras[0].shape:
+        return None
+    return float(reg[mascaras[0]].mean()), float(reg[mascaras[1]].mean())
+
+
+def decidir_bonnie(ameaca: bool, n_presenca: int, n_vazio: int, rosto: float,
+                   janela: tuple[float, float] | None) -> tuple[bool, int, int, bool]:
     """Atualiza o estado HELD do Bonnie a partir de UMA leitura. Pura — testável offline e
-    compartilhada com o monitor (antes cada um tinha a sua cópia da lógica).
+    compartilhada com o monitor.
 
+    `rosto` = score do template (porta aberta). `janela` = ler_janela_sombra(frame).
     Retorna (ameaca, n_presenca, n_vazio, leitura_definitiva).
-      - PRESENÇA: só o rosto casado (porta aberta, luz acesa). É o único sinal forte (0,96 × 0,39).
-        Zera a contagem de vazio. DEBOUNCE_PRESENCA leituras setam a ameaça.
-      - VAZIO: com a luz acesa, corredor iluminado sem sombra (std > LIMIAR_VAZIO). Zera a contagem
-        de presença. DEBOUNCE_VAZIO leituras limpam a ameaça.
-      - Luz acesa e vão ESCURO (std < LIMIAR_SOMBRA): sombra do Bonnie OU o instante em que o botão
-        já acendeu e o corredor ainda não (9,24 × 9,07: perto demais para separar). NÃO seta a
-        ameaça, mas ZERA a contagem de vazio: é evidência contra "ele saiu".
-      - Luz apagada, ou std na faixa ambígua: MANTÉM estado e contadores.
+      - PRESENÇA: rosto casado OU, com a luz na cena, a silhueta escura. Zera a contagem de vazio;
+        DEBOUNCE_PRESENCA leituras setam a ameaça.
+      - VAZIO: luz na cena e silhueta clara. Zera a contagem de presença; DEBOUNCE_VAZIO leituras
+        limpam a ameaça.
+      - Luz fora da cena (apagada, ou o botão aceso antes de o corredor iluminar): MANTÉM tudo.
 
-    O bug que isto corrige (out/2026): a sombra caía no "mantém" e NÃO zerava a contagem de vazio.
-    Como a contagem é acumulada, picos isolados somavam até limpar a flag com o Bonnie ainda na
-    porta, e o agente reabria a porta e morria. (Uma 1ª versão também SETAVA a ameaça pela sombra;
-    os frames de transição da luz viraram falsos alarmes — por isso a sombra só bloqueia o vazio.)"""
-    if rosto > LIMIAR_AMEACA:
+    Histórico (out/2026): a versão anterior decidia por textura num retângulo grande. A sombra
+    não zerava a contagem de vazio, e picos isolados somavam até limpar a flag com o Bonnie ainda
+    na porta — o agente reabria e morria (16 de 18 mortes na N2)."""
+    luz_na_cena = janela is not None and janela[0] > LIMIAR_BORDA_ACESA
+    if rosto > LIMIAR_AMEACA or (luz_na_cena and janela[1] < LIMIAR_SILHUETA_VAZIA):
         n_vazio, n_presenca = 0, n_presenca + 1
         if n_presenca >= DEBOUNCE_PRESENCA:
             ameaca, n_presenca = True, 0
         return ameaca, n_presenca, n_vazio, True
-    if luz_acesa and std_vao > LIMIAR_VAZIO:
+    if luz_na_cena:
         n_presenca, n_vazio = 0, n_vazio + 1
         if n_vazio >= DEBOUNCE_VAZIO:
             ameaca, n_vazio = False, 0
         return ameaca, n_presenca, n_vazio, True
-    if luz_acesa and std_vao < LIMIAR_SOMBRA:
-        n_vazio = 0
     return ameaca, n_presenca, n_vazio, False
 
 # Estado real da PORTA pela cor do botão DOOR do painel (HUD) — Decisão 4B, mesma convenção
@@ -1160,9 +1186,9 @@ class FNAFEnv(gym.Env):
         # Reserva de energia (jul/2026): situação com bateria é mais segura que sem. Faz o
         # gasto custar imediatamente via γΦ'−Φ (≈ −k·ΔE por step) em vez de só no apagão —
         # observável (energia é o estado[6]), telescopa, não move o ótimo. Também desarma a
-        # armadilha do acampamento: a limpeza da ameaça FUNCIONA de porta fechada (a
-        # SOMBRA_REGIAO segue visível e a calibração foi feita assim: vazio 11.65 vs Bonnie
-        # 9.24), mas EXIGE a luz esquerda acesa — acampar de luz apagada nunca limpa a flag,
+        # armadilha do acampamento: a limpeza da ameaça FUNCIONA de porta fechada (a janela da
+        # JANELA_SOMBRA fica fora da porta e mostra a silhueta), mas EXIGE a luz esquerda
+        # acesa — acampar de luz apagada nunca limpa a flag,
         # e o termo de bloqueio validava ficar fechado p/ sempre; agora o relógio de energia
         # cobra o aluguel de cada segundo fechado, tornando rentável a rotina barata
         # "fechar → luz → confirmar vazio → reabrir" (sem precisar abrir p/ conferir).
@@ -1407,24 +1433,6 @@ class FNAFEnv(gym.Env):
         acesa — sem luz o vão fica escuro e o score cai (tratar com debounce)."""
         return self._match_ameaca(self._capturar_janela(), lado)
 
-    @staticmethod
-    def _luz_esq_visivel(frame_cinza: np.ndarray) -> bool:
-        """Luz esquerda acesa NA IMAGEM (brilho do botão LIGHT). Puro sobre a imagem."""
-        left, top, w, h = BOTAO_LUZ_ESQ
-        reg = frame_cinza[top:top + h, left:left + w]
-        return reg.size > 0 and float(reg.mean()) > LIMIAR_LUZ_ACESA
-
-    def _sombra_no_vao(self, frame_cinza: np.ndarray, lado: str = "esquerdo") -> float:
-        """Desvio-padrão do cinza na região do vão (textura). Corredor VAZIO iluminado tem
-        textura (bricks/correntes) → std ALTO (> LIMIAR_VAZIO = vazio confirmado). Bonnie no
-        vão OU luz apagada deixam o vão escuro e liso → std BAIXO (não confirma vazio). Puro
-        sobre a imagem → validável offline. Só o lado esquerdo (Bonnie)."""
-        left, top, w, h = SOMBRA_REGIAO
-        reg = frame_cinza[top:top + h, left:left + w]
-        if reg.size == 0:
-            return 0.0
-        return float(reg.std())
-
     def _porta_fechada_visual(self, frame_cor: np.ndarray, lado: str):
         """Estado real da porta pela cor do BOTÃO DOOR (mesma convenção do
         _verificar_botao_porta): verde=fechada → True, vermelho=aberta → False,
@@ -1457,12 +1465,10 @@ class FNAFEnv(gym.Env):
         """Atualiza ameaca_esq/dir.
 
         Bonnie (esquerda) é um estado HELD, decidido por `decidir_bonnie`:
-          - rosto casado (porta aberta)                                    → presença;
-          - corredor iluminado sem sombra (std > LIMIAR_VAZIO, luz acesa)  → vazio (saiu);
-          - vão escuro com a luz ACESA na imagem (sombra ou transição)     → só zera o vazio;
-          - luz apagada ou leitura ambígua                                 → mantém.
-        "Luz acesa" é lido do botão LIGHT na própria imagem. Debounce ACUMULADO: só a leitura
-        OPOSTA zera a contagem.
+          - rosto casado, ou silhueta escura na janela iluminada  → presença (porta aberta OU fechada);
+          - janela iluminada e silhueta clara                     → vazio (saiu);
+          - janela sem luz (apagada ou transição do botão)        → mantém.
+        Debounce ACUMULADO: só a leitura OPOSTA zera a contagem.
 
         Chica (direita): aparece na janela com porta aberta OU fechada → rosto, só com a
         luz direita acesa; some após DEBOUNCE_VAZIO leituras vazias.
@@ -1479,9 +1485,8 @@ class FNAFEnv(gym.Env):
         # debounce só protege a FLAG do flicker.
         self.ameaca_esq, self._presenca_esq, self._vazio_esq, definitiva = decidir_bonnie(
             self.ameaca_esq, self._presenca_esq, self._vazio_esq,
-            luz_acesa=self._luz_esq_visivel(frame_cinza),
-            std_vao=self._sombra_no_vao(frame_cinza, "esquerdo"),
-            rosto=self._match_ameaca(frame_cinza, "esquerdo"))
+            rosto=self._match_ameaca(frame_cinza, "esquerdo"),
+            janela=ler_janela_sombra(frame_cinza))
         if definitiva:
             self._t_confirmacao_esq = time.perf_counter()
 
