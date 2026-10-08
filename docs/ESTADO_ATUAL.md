@@ -218,8 +218,12 @@ Os porquês, o runbook, os riscos e o glossário estão em
     acende antes do corredor não vira falso alarme, e a sombra **acende** a ameaça com a porta aberta
     ou fechada. Lógica única em `decidir_bonnie` (env e monitor); teste com 13 casos, incluindo o
     print 04 do bug. Recalibração: `python -m src.utils.calibrar sombra vazio|sombra|apagada`.
-  - **Falta medir o efeito no jogo:** o RL 190k na N2 (`jogar --noite 2 --episodios 20`), contra a
-    referência de 1 vitória em 20 noites e 16 de 18 mortes do Bonnie.
+  - **Efeito no jogo (7–8/out, RL 190k na N2, sem vídeo): nenhum.** 1/20 vitórias e sobrevivência
+    mediana de 281 s, contra 1/20 e 273 s antes da correção; segue morrendo cedo com bateria
+    sobrando (88% aos 55 s). Duas explicações em aberto: (A) dentro do loop do agente a captura sai
+    antes de o corredor iluminar e o detector fica mudo (no monitor a luz ficava segurada); (B) o
+    detector vê, mas a política, treinada com a flag errada, não usa. Para separar, o `jogar` agora
+    imprime por episódio `luzE n (acesa x, silhueta y) | flagE z%` (commit `b65a167`).
 - **O Freddy está inativo nas noites 1–2.** Conhecimento do jogo, não verificado neste ambiente.
 - **A rajada resolve a estática e o piscar.** Raciocínio sólido, não medido (M4).
 - **Por que o BC deu 68% em agosto e 43% agora.** Mesmo arquivo e mesmo código de ambiente.
