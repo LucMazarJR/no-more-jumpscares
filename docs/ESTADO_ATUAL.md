@@ -17,7 +17,12 @@
      (p = 0,00003). Ele aprendeu a gastar energia para durar mais na N2 e perdeu a habilidade da N1.
 3. **A parede é a Noite 2:** 1 vitória em ~56 episódios de avaliação, somando todos os modelos.
    Tirar a imagem da CNN não muda a vitória, então a imagem atual não carrega o que importa.
-4. **Decisão (out/2026):** parar de investir no PPO. Seguir para percepção robusta (Fase 2) e
+4. **Ressalva (7/out):** todas as runs e avaliações acima usaram o detector do Bonnie com o bug que
+   limpava a flag com ele ainda na porta (§6). Os números valem como retrato do que aconteceu, mas a
+   **causa** das conclusões sobre o PPO fica em aberto: a degradação do 340k (defender demais e
+   gastar energia) é o que um agente aprenderia se a flag mentisse. E a coluna de ameaça das demos
+   humanas também foi gravada com a lógica antiga (os frames 84×84 não permitem recalcular).
+5. **Decisão (out/2026, a reavaliar depois do teste da correção):** parar de investir no PPO. Seguir para percepção robusta (Fase 2) e
    aprendizado off-policy com demos permanentes (Fase 3). Detalhes em
    [ESTRATEGIA_DEMOS_E_PERCEPCAO.md](ESTRATEGIA_DEMOS_E_PERCEPCAO.md).
 
