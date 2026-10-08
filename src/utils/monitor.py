@@ -20,8 +20,9 @@ from pathlib import Path
 import cv2
 import keyboard
 
-from src.environment.fnaf_env import (FNAFEnv, LIMIAR_AMEACA, LIMIAR_SOMBRA, LIMIAR_VAZIO,
-                                      DEBOUNCE_VAZIO, decidir_bonnie, validar_leitura_energia)
+from src.environment.fnaf_env import (FNAFEnv, LIMIAR_AMEACA, LIMIAR_BORDA_ACESA,
+                                      LIMIAR_SILHUETA_VAZIA, DEBOUNCE_VAZIO, decidir_bonnie,
+                                      ler_janela_sombra, validar_leitura_energia)
 from src.utils.capture import GameCapture, regiao_cliente
 from src.utils.inspecionar import _melhor_janela
 
@@ -63,9 +64,10 @@ def main():
     cap = GameCapture()
     print("Monitor de percepção — Ctrl+C para sair")
     print("(deixe o jogo num monitor e este terminal no outro)")
-    print(f"Bonnie é HELD: rosto ou sombra com luz (s<{LIMIAR_SOMBRA:.0f}) SETA, corredor vazio "
-          f"com luz (s>{LIMIAR_VAZIO:.0f}) LIMPA, luz apagada MANTÉM.")
-    print("legenda: r=rosto(>%.2f)  s=std do vão  c=chica  porta=botão DOOR\n" % LIMIAR_AMEACA)
+    print(f"Bonnie é HELD: rosto, ou silhueta escura na janela iluminada, SETA; janela iluminada "
+          f"e vazia LIMPA; janela sem luz MANTÉM.")
+    print(f"legenda: rosto(>{LIMIAR_AMEACA:.2f})  bor=borda do vidro (luz se >{LIMIAR_BORDA_ACESA:.0f})  "
+          f"sil=silhueta (Bonnie se <{LIMIAR_SILHUETA_VAZIA:.0f})  c=chica  porta=botão DOOR\n")
     print("F8 = salvar o frame atual em debug/quadros/ (como o agente vê)\n")
     # O handler do keyboard roda em outra thread: só marca o pedido; o loop salva o frame
     # que ele mesmo acabou de capturar (sem mexer no mss fora da thread principal).
@@ -84,7 +86,9 @@ def main():
                 time.sleep(1.0)
                 continue
             rosto = env._match_ameaca(g, "esquerdo")    # rosto do Bonnie (seta a ameaça)
-            std = env._sombra_no_vao(g, "esquerdo")     # std do vão (alto = corredor vazio)
+            janela = ler_janela_sombra(g)               # (borda, silhueta) da janela do Bonnie
+            bor, sil = janela if janela is not None else (float("nan"), float("nan"))
+            luz_e = janela is not None and bor > LIMIAR_BORDA_ACESA
             chica = env._match_ameaca(g, "direito")     # Chica na janela
             porta_e = env._porta_fechada_visual(cor, "esquerdo")  # True=fechada/False=aberta/None
             lido = env._ler_energia(g)
@@ -93,9 +97,8 @@ def main():
             else:
                 filtrada = validar_leitura_energia(lido, filtrada)
             # Bonnie HELD: a MESMA função do env (antes o monitor tinha uma cópia da lógica).
-            luz_e = env._luz_esq_visivel(g)
             ameaca_e, n_rosto, n_vazio, _ = decidir_bonnie(
-                ameaca_e, n_rosto, n_vazio, luz_acesa=luz_e, std_vao=std, rosto=rosto)
+                ameaca_e, n_rosto, n_vazio, rosto=rosto, janela=janela)
             # Chica HELD: rosto seta; limpa após DEBOUNCE_VAZIO frames sem rosto
             if chica > LIMIAR_AMEACA:
                 n_chica_off, ameaca_d = 0, True
@@ -108,13 +111,14 @@ def main():
             pe = "fech" if porta_e is True else ("abr " if porta_e is False else " ?  ")
             # std/rosto oscilam com a estática (normal); o estado HELD B[] fica estável.
             txt_filt = f"{filtrada:4.1f}%" if filtrada is not None else " --  "
-            print(f"\rESQ[{pe}] luz[{'on ' if luz_e else 'off'}] B[{fb}] (rosto{rosto:.2f} vao{std:4.1f})  "
+            print(f"\rESQ[{pe}] luz[{'on ' if luz_e else 'off'}] B[{fb}] "
+                  f"(rosto{rosto:.2f} bor{bor:5.1f} sil{sil:5.1f})  "
                   f"Chica[{fd}] c{chica:.2f}  en{txt_filt}   ", end="", flush=True)
             if pedido_salvar:
                 pedido_salvar.clear()
                 pasta_quadros.mkdir(parents=True, exist_ok=True)
                 nome = (f"{datetime.now():%Y%m%d_%H%M%S}_porta-{pe.strip() or 'nd'}_"
-                        f"luz-{'on' if luz_e else 'off'}_vao{std:.2f}_rosto{rosto:.2f}_"
+                        f"luz-{'on' if luz_e else 'off'}_bor{bor:.1f}_sil{sil:.1f}_rosto{rosto:.2f}_"
                         f"flag-{'ameaca' if ameaca_e else 'limpa'}.png").replace("?", "nd")
                 cv2.imwrite(str(pasta_quadros / nome), cor)
                 print(f"\n  salvo: debug/quadros/{nome}")
