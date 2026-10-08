@@ -77,9 +77,11 @@ logs/tensorboard/<run>/               uma pasta por run; _pre_pacote/ = runs ant
   - **Desconfie dos sensores antes de culpar a política.** A percepção é feita de heurísticas
     calibradas com poucas imagens (limiares de textura, templates, cor de botão). Quando o agente
     erra de um jeito "burro" e repetido, verifique primeiro se o sensor está mentindo (`monitor` ao
-    vivo, fixtures em `debug/`). Exemplo: em out/2026, o agente reabria a porta com o Bonnie lá; a
-    suspeita é a decisão "corredor vazio" por textura em cinza, que ninguém tinha testado com a
-    porta fechada.
+    vivo, fixtures em `debug/`). Exemplo: em out/2026, o agente reabria a porta com o Bonnie lá. O
+    sensor da sombra funcionava; a lógica em cima dele somava picos de ruído isolados até limpar a
+    flag, porque a leitura de sombra não zerava a contagem.
+  - Ao analisar um sensor, confirme com o usuário **o que ele deveria medir** antes de concluir que
+    está errado: o conhecimento do jogo dele já corrigiu uma leitura errada (a "parede" era a sombra).
   - Antes de investir numa hipótese (ex.: "quem mata é o Foxy"), confira se ela foi **medida** ou
     só **inferida**. Assistir o agente jogar, gravando a tela, é uma medição barata e subestimada.
 - **Setup de 2 PCs** (prefixo `PC=` nos logs). O merge de pesos entre linhagens foi DESCONTINUADO porque quebra a política.
