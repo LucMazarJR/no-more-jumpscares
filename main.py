@@ -132,12 +132,15 @@ def _resumo_avaliacao(eps: list[dict]) -> list[str]:
         grupo = [e for e in eps if e["noite"] == noite]
         v = sum(1 for e in grupo if e["resultado"] == "VITORIA")
         causas = ", ".join(f"{c} {n}" for c, n in Counter(e["causa"] for e in grupo).most_common(3))
+        luz = sum(e.get("luz", 0) for e in grupo)
+        janela = (f" | luzE: cena acesa em {sum(e.get('acesa', 0) for e in grupo)}/{luz} capturas, "
+                  f"silhueta em {sum(e.get('silhueta', 0) for e in grupo)}" if luz else "")
         linhas.append(
             f"Noite {noite}: vitórias {v}/{len(grupo)} ({100 * v / len(grupo):.0f}%) | "
             f"sobrev mediana {median(e['tempo'] for e in grupo):.0f}s | "
             f"ações/min {sum(e['acoes_min'] for e in grupo) / len(grupo):.1f} | "
             f"s/step {sum(e['tempo'] for e in grupo) / max(1, sum(e['passos'] for e in grupo)):.2f} | "
-            f"{causas}")
+            f"{causas}{janela}")
     return linhas
 
 
@@ -160,7 +163,7 @@ def modo_jogar():
 
     import numpy as np
 
-    from src.environment.fnaf_env import RESET_METODO
+    from src.environment.fnaf_env import LIMIAR_BORDA_ACESA, LIMIAR_SILHUETA_VAZIA, RESET_METODO
 
     ablacao = _valor_flag("--ablacao")
     if "--ablacao" in sys.argv and ablacao not in ("imagem", "estados"):
@@ -211,6 +214,9 @@ def modo_jogar():
             terminado = truncado = False
             info = {}
             n_acoes = 0
+            # Telemetria da janela do Bonnie: o detector vê o corredor iluminado DENTRO do loop
+            # do agente (luz apertada e capturada no mesmo step), ou só a transição escura?
+            n_luz = n_acesa = n_silhueta = n_flag = 0
             lstm_states = None                          # estado da LSTM
             ep_start = np.ones((1,), dtype=bool)        # sinaliza início → a LSTM zera o estado
 
@@ -229,6 +235,13 @@ def modo_jogar():
                 obs, _, terminado, truncado, info = env.step(int(acao))
                 if info.get("acao_nome", "nada") != "nada":
                     n_acoes += 1
+                n_flag += bool(info.get("ameaca_esq"))
+                if info.get("luz_esq"):
+                    n_luz += 1
+                    janela = info.get("janela_esq")
+                    if janela is not None and janela[0] > LIMIAR_BORDA_ACESA:
+                        n_acesa += 1
+                        n_silhueta += janela[1] < LIMIAR_SILHUETA_VAZIA
 
             if info.get("interrompido"):
                 resultado = "INTERROMPIDO"
@@ -242,11 +255,17 @@ def modo_jogar():
             ep = {"noite": info.get("noite", 1), "resultado": resultado, "tempo": tempo,
                   "passos": info.get("passos", 0), "causa": info.get("causa") or "-",
                   "energia": info.get("energia", 0.0),
-                  "acoes_min": n_acoes / (tempo / 60) if tempo > 0 else 0.0}
+                  "acoes_min": n_acoes / (tempo / 60) if tempo > 0 else 0.0,
+                  "luz": n_luz, "acesa": n_acesa, "silhueta": n_silhueta,
+                  "flag_pct": 100 * n_flag / max(1, info.get("passos", 0))}
             eps.append(ep)
+            # Os campos de telemetria vão DEPOIS da causa: os parsers (resumo_avaliacoes,
+            # taxa_acao) leem até a causa e ignoram o resto da linha.
             linha = (f"Ep {len(eps):3d} | Noite {ep['noite']} | {resultado:12s} | "
                      f"sobrev {tempo:5.0f}s ({ep['passos']:4d}p) | energia {ep['energia']:5.1f}% | "
-                     f"ações/min {ep['acoes_min']:5.1f} | causa {ep['causa']}")
+                     f"ações/min {ep['acoes_min']:5.1f} | causa {ep['causa']} | "
+                     f"luzE {n_luz} (acesa {n_acesa}, silhueta {n_silhueta}) | "
+                     f"flagE {ep['flag_pct']:.0f}%")
             print(linha)
             log.write(linha + "\n")
             log.flush()

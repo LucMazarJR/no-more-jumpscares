@@ -418,6 +418,7 @@ class FNAFEnv(gym.Env):
         self._vazio_esq = 0
         self._vazio_dir = 0
         self._presenca_esq = 0
+        self._janela_esq = None   # última leitura (borda, silhueta) da janela do Bonnie — telemetria
         # Noite (Decisão 7) — rastreada internamente pelo desfecho do episódio anterior.
         # NÃO é zerada no reset() (persiste entre episódios; só a transição abaixo a muda).
         self.noite = 1
@@ -763,6 +764,7 @@ class FNAFEnv(gym.Env):
         self._vazio_esq               = 0
         self._vazio_dir               = 0
         self._presenca_esq            = 0
+        self._janela_esq              = None
 
         # Garante a janela ANTES de clicar no menu, reabrindo o jogo se ele fechou na transicao.
         if not self._garantir_janela():
@@ -927,6 +929,7 @@ class FNAFEnv(gym.Env):
             "camera_ativa":   self.camera_ativa,
             "ameaca_esq":     self.ameaca_esq,
             "ameaca_dir":     self.ameaca_dir,
+            "janela_esq":     self._janela_esq,   # (borda, silhueta) desta captura, ou None
             "morreu":         morreu,
             "vitoria":        sobreviveu,   # 6AM REAL (terminal). Truncamento (700s) NÃO é vitória.
             "acao_valida":    acao_valida,
@@ -1478,7 +1481,9 @@ class FNAFEnv(gym.Env):
         ameaça). Então segura o último estado derivado do escritório: a ameaça não some só
         porque o jogador ergueu a tablet, igual ao jogo real."""
         if self.camera_aberta:
+            self._janela_esq = None
             return
+        self._janela_esq = ler_janela_sombra(frame_cinza)
         # Bonnie (esquerda) — estado HELD decidido por decidir_bonnie (ver a docstring dela).
         # Toda leitura DEFINITIVA (presença ou vazio) re-ancora a idade da informação do lado
         # (estados 13-14) — mesmo antes de o debounce completar: a informação está fresca, o
@@ -1486,7 +1491,7 @@ class FNAFEnv(gym.Env):
         self.ameaca_esq, self._presenca_esq, self._vazio_esq, definitiva = decidir_bonnie(
             self.ameaca_esq, self._presenca_esq, self._vazio_esq,
             rosto=self._match_ameaca(frame_cinza, "esquerdo"),
-            janela=ler_janela_sombra(frame_cinza))
+            janela=self._janela_esq)
         if definitiva:
             self._t_confirmacao_esq = time.perf_counter()
 
