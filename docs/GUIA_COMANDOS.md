@@ -62,6 +62,9 @@ python main.py jogar --modelo modelos/fnaf_bc.zip --estocastico --noite 1 --epis
 - `--noite 1 --episodios 5`: mira a Noite 1 e para depois de 5 episódios dela. Cada vitória rende
   um episódio de Noite 2 de brinde.
 - `--ablacao imagem`: zera a imagem para medir se a CNN ajuda.
+- `--trace`: grava cada step num CSV (`logs/analise/trace_<data>.csv`). Depois,
+  `python scripts/analisar_trace.py --detalhe 12` mostra o que o agente fazia antes de cada morte
+  (porta, luz, leitura da janela do Bonnie, flag) e se ele abriu a porta com a flag acesa.
 
 **A noite inteira, sem você** (intercalando modelos, que é o único jeito justo de comparar):
 

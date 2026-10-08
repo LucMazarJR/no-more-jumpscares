@@ -119,7 +119,7 @@ def modo_bc():
 
 
 USO_JOGAR = ("python main.py jogar [--modelo <zip>] [--estocastico] [--noite N] "
-              "[--episodios K] [--ablacao imagem|estados]")
+              "[--episodios K] [--ablacao imagem|estados] [--trace]")
 
 
 def _resumo_avaliacao(eps: list[dict]) -> list[str]:
@@ -155,6 +155,9 @@ def modo_jogar():
       --episodios K    para após K episódios na noite alvo (ou K no total, sem --noite).
       --ablacao imagem|estados  zera aquele ramo da observação antes do predict (Decisão 5):
                        se zerar a IMAGEM não derruba a vitória, a CNN não está contribuindo.
+      --trace          grava CADA step em logs/analise/trace_<data>.csv (ação, portas, luz,
+                       leitura da janela do Bonnie, flags, energia) — para ver o que o agente
+                       fez antes de cada morte. Analisar com scripts/analisar_trace.py.
 
     Cada episódio vai p/ logs/analise/avaliacoes.log (com a configuração no cabeçalho) e o
     desyncs da avaliação p/ logs/analise/avaliacoes_desyncs.log — nada disso se mistura aos
@@ -205,6 +208,16 @@ def modo_jogar():
     os.makedirs("logs/analise", exist_ok=True)
     log = open("logs/analise/avaliacoes.log", "a", encoding="utf-8")
     log.write(f"\n{'=' * 60}\nAvaliação iniciada\n{config}\n{'=' * 60}\n")
+    trace = None
+    if "--trace" in sys.argv:
+        import csv
+        caminho_trace = f"logs/analise/trace_{datetime.now():%Y%m%d_%H%M}.csv"
+        arq_trace = open(caminho_trace, "w", encoding="utf-8", newline="")
+        trace = csv.writer(arq_trace)
+        trace.writerow(["ep", "passo", "tempo", "noite", "acao", "acao_valida", "porta_esq",
+                        "porta_dir", "luz_esq", "luz_dir", "camera", "borda", "silhueta",
+                        "ameaca_esq", "ameaca_dir", "energia", "fim"])
+        print(f"Trace por step em {caminho_trace}")
 
     eps: list[dict] = []
     try:
@@ -242,6 +255,19 @@ def modo_jogar():
                     if janela is not None and janela[0] > LIMIAR_BORDA_ACESA:
                         n_acesa += 1
                         n_silhueta += janela[1] < LIMIAR_SILHUETA_VAZIA
+                if trace is not None:
+                    j = info.get("janela_esq")
+                    fim = ("morte" if info.get("morreu") else "vitoria" if info.get("vitoria")
+                           else "") if (terminado or truncado) else ""
+                    trace.writerow([
+                        len(eps) + 1, info.get("passos", 0), f"{info.get('tempo', 0.0):.1f}",
+                        info.get("noite", 1), info.get("acao_nome", ""), int(bool(info.get("acao_valida"))),
+                        int(bool(info.get("porta_esq"))), int(bool(info.get("porta_dir"))),
+                        int(bool(info.get("luz_esq"))), int(bool(info.get("luz_dir"))),
+                        int(bool(info.get("camera_aberta"))),
+                        f"{j[0]:.1f}" if j else "", f"{j[1]:.1f}" if j else "",
+                        int(bool(info.get("ameaca_esq"))), int(bool(info.get("ameaca_dir"))),
+                        f"{info.get('energia', 0.0):.1f}", fim])
 
             if info.get("interrompido"):
                 resultado = "INTERROMPIDO"
@@ -269,6 +295,8 @@ def modo_jogar():
             print(linha)
             log.write(linha + "\n")
             log.flush()
+            if trace is not None:
+                arq_trace.flush()
     except KeyboardInterrupt:
         print("\nAvaliação interrompida (Ctrl+C).")
     finally:
@@ -281,6 +309,8 @@ def modo_jogar():
             log.write("Resumo:\n" + "".join(f"  {l}\n" for l in resumo))
         log.write("Avaliação finalizada\n")
         log.close()
+        if trace is not None:
+            arq_trace.close()
 
 
 if __name__ == "__main__":
