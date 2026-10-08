@@ -206,8 +206,10 @@ Os porquês, o runbook, os riscos e o glossário estão em
 
 - **Noites 6/7** têm botões de menu próprios (o Continue não chega nelas). Calibrar quando a N5
   estiver dominada.
-- **`morte_animatronico` é genérico** (não separa Foxy de Freddy). Melhoria de telemetria a
-  considerar se isso bloquear uma decisão da Fase 2.
+- **`morte_animatronico` é genérico** (não diz quem matou). Hoje só se sabe assistindo o vídeo.
+  Proposta (out/2026): guardar os últimos frames coloridos antes de cada morte (o jumpscare costuma
+  estar neles) e, com eles rotulados, classificar o jumpscare pela cor para virar
+  `morte_bonnie`/`morte_chica`/`morte_foxy`/`morte_freddy` no log.
 - **Fixtures de teste faltando no PC pc4:** as imagens `debug/quadro_*.png` (git-ignoradas) não
   estão aqui, então o `testar_deteccao_ameaca` só roda 2 dos 15 casos ("Rosto: 0/0"). Copiar do
   outro PC.

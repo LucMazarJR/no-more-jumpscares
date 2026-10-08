@@ -74,6 +74,14 @@ logs/tensorboard/<run>/               uma pasta por run; _pre_pacote/ = runs ant
   - Uma variável por vez.
   - Critério de aborto registrado ANTES de uma run longa.
   - Refutar com dados uma afirmação de doc ou comentário é resultado, não problema.
+  - **Desconfie dos sensores antes de culpar a política.** A percepção é feita de heurísticas
+    calibradas com poucas imagens (limiares de textura, templates, cor de botão). Quando o agente
+    erra de um jeito "burro" e repetido, verifique primeiro se o sensor está mentindo (`monitor` ao
+    vivo, fixtures em `debug/`). Exemplo: em out/2026, o agente reabria a porta com o Bonnie lá; a
+    suspeita é a decisão "corredor vazio" por textura em cinza, que ninguém tinha testado com a
+    porta fechada.
+  - Antes de investir numa hipótese (ex.: "quem mata é o Foxy"), confira se ela foi **medida** ou
+    só **inferida**. Assistir o agente jogar, gravando a tela, é uma medição barata e subestimada.
 - **Setup de 2 PCs** (prefixo `PC=` nos logs). O merge de pesos entre linhagens foi DESCONTINUADO porque quebra a política.
 - **Idioma do projeto:** português (código, comentários, docs, logs).
 
