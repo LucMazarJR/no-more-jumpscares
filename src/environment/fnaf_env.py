@@ -225,27 +225,31 @@ def decidir_bonnie(ameaca: bool, n_presenca: int, n_vazio: int, luz_acesa: bool,
     compartilhada com o monitor (antes cada um tinha a sua cópia da lógica).
 
     Retorna (ameaca, n_presenca, n_vazio, leitura_definitiva).
-      - PRESENÇA: rosto casado (porta aberta) OU, com a luz acesa, a sombra (std < LIMIAR_SOMBRA).
+      - PRESENÇA: só o rosto casado (porta aberta, luz acesa). É o único sinal forte (0,96 × 0,39).
         Zera a contagem de vazio. DEBOUNCE_PRESENCA leituras setam a ameaça.
       - VAZIO: com a luz acesa, corredor iluminado sem sombra (std > LIMIAR_VAZIO). Zera a contagem
         de presença. DEBOUNCE_VAZIO leituras limpam a ameaça.
-      - Luz apagada, ou std na faixa ambígua: MANTÉM estado e contadores (não confirma nada).
+      - Luz acesa e vão ESCURO (std < LIMIAR_SOMBRA): sombra do Bonnie OU o instante em que o botão
+        já acendeu e o corredor ainda não (9,24 × 9,07: perto demais para separar). NÃO seta a
+        ameaça, mas ZERA a contagem de vazio: é evidência contra "ele saiu".
+      - Luz apagada, ou std na faixa ambígua: MANTÉM estado e contadores.
 
     O bug que isto corrige (out/2026): a sombra caía no "mantém" e NÃO zerava a contagem de vazio.
-    Como a contagem é acumulada, picos isolados (luz acendendo, animação da porta) somavam até
-    limpar a flag com o Bonnie ainda na porta, e o agente reabria a porta e morria."""
-    presenca = rosto > LIMIAR_AMEACA or (luz_acesa and std_vao < LIMIAR_SOMBRA)
-    vazio = luz_acesa and std_vao > LIMIAR_VAZIO
-    if presenca:
+    Como a contagem é acumulada, picos isolados somavam até limpar a flag com o Bonnie ainda na
+    porta, e o agente reabria a porta e morria. (Uma 1ª versão também SETAVA a ameaça pela sombra;
+    os frames de transição da luz viraram falsos alarmes — por isso a sombra só bloqueia o vazio.)"""
+    if rosto > LIMIAR_AMEACA:
         n_vazio, n_presenca = 0, n_presenca + 1
         if n_presenca >= DEBOUNCE_PRESENCA:
             ameaca, n_presenca = True, 0
         return ameaca, n_presenca, n_vazio, True
-    if vazio:
+    if luz_acesa and std_vao > LIMIAR_VAZIO:
         n_presenca, n_vazio = 0, n_vazio + 1
         if n_vazio >= DEBOUNCE_VAZIO:
             ameaca, n_vazio = False, 0
         return ameaca, n_presenca, n_vazio, True
+    if luz_acesa and std_vao < LIMIAR_SOMBRA:
+        n_vazio = 0
     return ameaca, n_presenca, n_vazio, False
 
 # Estado real da PORTA pela cor do botão DOOR do painel (HUD) — Decisão 4B, mesma convenção
@@ -1453,11 +1457,12 @@ class FNAFEnv(gym.Env):
         """Atualiza ameaca_esq/dir.
 
         Bonnie (esquerda) é um estado HELD, decidido por `decidir_bonnie`:
-          - rosto casado (porta aberta) OU sombra com a luz ACESA na imagem → presença;
+          - rosto casado (porta aberta)                                    → presença;
           - corredor iluminado sem sombra (std > LIMIAR_VAZIO, luz acesa)  → vazio (saiu);
+          - vão escuro com a luz ACESA na imagem (sombra ou transição)     → só zera o vazio;
           - luz apagada ou leitura ambígua                                 → mantém.
-        A sombra é escura igual à luz apagada, por isso o "luz acesa" é lido do botão LIGHT na
-        própria imagem. Debounce ACUMULADO: só a leitura OPOSTA zera a contagem.
+        "Luz acesa" é lido do botão LIGHT na própria imagem. Debounce ACUMULADO: só a leitura
+        OPOSTA zera a contagem.
 
         Chica (direita): aparece na janela com porta aberta OU fechada → rosto, só com a
         luz direita acesa; some após DEBOUNCE_VAZIO leituras vazias.

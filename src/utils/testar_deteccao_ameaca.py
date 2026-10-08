@@ -55,12 +55,17 @@ CASOS_SOMBRA = [
 # isolados de "sem sombra" somavam até limpar a flag com o Bonnie ainda na porta.
 #   01 = porta aberta, Bonnie visível (rosto)    02/06 = porta fechada, luz acesa, SOMBRA
 #   03 = porta fechada, luz APAGADA              07   = porta fechada, luz acesa, SEM sombra
+#   08 = porta aberta, botão LIGHT aceso mas corredor ainda escuro (transição), sem Bonnie
+#   09 = porta aberta, luz acesa, corredor vazio iluminado
 # (nome do caso, sequência de frames, estado esperado da flag no fim)
 CASOS_SEQUENCIA = [
     ("vê o rosto",                         ["01", "01"], True),
     ("picos isolados entre sombras (bug)", ["01", "01", "07", "02", "07", "06", "07", "02", "07", "06"], True),
     ("luz apagada não confirma nada",      ["01", "01", "03", "03", "03", "03", "03"], True),
     ("Bonnie saiu: sem sombra seguida",    ["01", "01", "07", "07", "07", "07"], False),
+    ("transição da luz não inventa ameaça", ["09", "08", "08", "08", "09", "08", "08"], False),
+    ("sombra sozinha não inventa ameaça",  ["02", "02", "06", "06"], False),
+    ("Bonnie saiu pela porta aberta",      ["01", "01", "09", "09", "09", "09"], False),
 ]
 BONNIE_PORTA = DEBUG / "bonnie_porta"
 
