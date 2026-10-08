@@ -198,6 +198,15 @@ Os porquês, o runbook, os riscos e o glossário estão em
     foi calibrado para "abrir com ameaça velha compensa").
   - Teste que separa as duas: `python -m src.utils.monitor` ao vivo, porta fechada e luz acesa com o
     Bonnie presente. Se o detector disser "vazio", é a A.
+  - **Resultado (7/out, prints em `debug/bonnie_porta/`): é a A, e pior.** A `SOMBRA_REGIAO` não
+    fica sobre o vão da porta, e sim na parede à direita dela. A textura dá 9,25 com o Bonnie presente,
+    ausente e com a porta fechada, ou seja, não mede o Bonnie. Variações de brilho da parede (11,66)
+    contam como "corredor vazio" e limpam a flag. Bug reproduzido: flag limpa com a porta fechada às
+    22:38:12, Bonnie ainda na porta ao abrir às 22:38:19. O detector de **rosto** funciona bem (0,96
+    presente × 0,39 ausente), e a leitura da porta pela cor do botão também.
+  - Com a porta fechada, o Bonnie fica invisível (a porta cobre o vão). Correção proposta: porta
+    fechada → a flag não muda e a idade da informação cresce; porta aberta com luz → o rosto decide.
+    A textura sai da decisão. Não muda a observação: mede-se com o `jogar` nos modelos atuais.
 - **O Freddy está inativo nas noites 1–2.** Conhecimento do jogo, não verificado neste ambiente.
 - **A rajada resolve a estática e o piscar.** Raciocínio sólido, não medido (M4).
 - **Por que o BC deu 68% em agosto e 43% agora.** Mesmo arquivo e mesmo código de ambiente.
