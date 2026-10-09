@@ -17,8 +17,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from src.environment.fnaf_env import (FNAFEnv, JANELA_SOMBRA, LIMIAR_AMEACA, LIMIAR_BORDA_ACESA,
-                                      LIMIAR_SILHUETA_VAZIA, decidir_bonnie, ler_janela_sombra)
+from src.environment.fnaf_env import (BOTAO_LUZ_ESQ, FNAFEnv, JANELA_SOMBRA, LIMIAR_AMEACA,
+                                      LIMIAR_BORDA_ACESA, LIMIAR_SILHUETA_VAZIA, decidir_bonnie,
+                                      ler_janela_sombra)
 
 DEBUG = Path("debug")
 REFS = Path("src/utils/referencias")
@@ -61,6 +62,8 @@ CASOS_JANELA = [
 #   08    = porta aberta, botão aceso mas corredor escuro (transição)
 #   09    = porta aberta, luz acesa, vazio
 # (nome do caso, sequência de frames, estado esperado da flag no fim)
+#   "NN>D" = o frame NN com a visão GIRADA D px para a direita (o conteúdo anda para a esquerda),
+#            simulando o agente olhando para o centro/direita — a trava de alinhamento tem de barrar.
 CASOS_SEQUENCIA = [
     ("vê o rosto",                             ["01", "01"], True),
     ("picos isolados entre sombras (bug)",     ["01", "01", "07", "02", "07", "06", "07", "02", "07", "06"], True),
@@ -70,6 +73,8 @@ CASOS_SEQUENCIA = [
     ("sombra com a porta fechada acende",      ["07", "02", "06"], True),
     ("o print 04: Bonnie ainda lá",            ["02", "02", "04", "04"], True),
     ("Bonnie saiu pela porta aberta",          ["01", "01", "09", "09", "09", "09"], False),
+    ("visão girada não acende (200 px)",       ["09", "07>200", "07>200", "03>200", "07>10"], False),
+    ("visão girada não apaga (240 px)",        ["01", "01", "07>240", "09>240", "07>300", "09>300"], True),
 ]
 BONNIE_PORTA = DEBUG / "bonnie_porta"
 
@@ -107,12 +112,16 @@ def _rodar_rosto(env):
 
 
 def _rodar_janela():
-    """Cola cada recorte na posição da JANELA_SOMBRA de um frame preto e lê pelas máscaras."""
+    """Cola cada recorte na posição da JANELA_SOMBRA de um frame preto e lê pelas máscaras.
+    O botão LIGHT é pintado aceso no lugar calibrado para passar a trava de alinhamento (a trava
+    em si é testada nas sequências, com frames reais girados)."""
     ok = total = 0
     left, top, w, h = JANELA_SOMBRA
+    bl, bt, bw, bh = BOTAO_LUZ_ESQ
     for nome, luz_esp, bonnie_esp in CASOS_JANELA:
         recorte = cv2.imread(str(SOMBRA_REF / f"janela_{nome}.png"), cv2.IMREAD_GRAYSCALE)
         frame = np.zeros((720, 1280), np.uint8)
+        frame[bt:bt + bh, bl:bl + bw] = 255
         if recorte is not None:
             frame[top:top + h, left:left + w] = recorte
         leitura = None if recorte is None else ler_janela_sombra(frame)
@@ -130,17 +139,25 @@ def _rodar_janela():
     return ok, total
 
 
+def _girar(frame, desloc: int):
+    """Visão girada `desloc` px para a direita: o conteúdo anda para a esquerda."""
+    g = np.zeros_like(frame)
+    g[:, :-desloc] = frame[:, desloc:]
+    return g
+
+
 def _rodar_sequencias(env):
     frames = {p.name[:2]: cv2.cvtColor(cv2.imread(str(p)), cv2.COLOR_BGR2GRAY)
               for p in BONNIE_PORTA.glob("0*.png")}
     ok = total = 0
     for nome, seq, esperado in CASOS_SEQUENCIA:
-        if any(k not in frames for k in seq):
+        if any(k.split(">")[0] not in frames for k in seq):
             print(f"  [--]   {nome:38s} (frames ausentes em {BONNIE_PORTA}/)")
             continue
         ameaca, n_p, n_v = False, 0, 0
         for k in seq:
-            g = frames[k]
+            base, _, desloc = k.partition(">")
+            g = _girar(frames[base], int(desloc)) if desloc else frames[base]
             ameaca, n_p, n_v, _ = decidir_bonnie(
                 ameaca, n_p, n_v, rosto=env._match_ameaca(g, "esquerdo"),
                 janela=ler_janela_sombra(g))

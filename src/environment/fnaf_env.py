@@ -212,6 +212,15 @@ GAMMA = 0.997
 JANELA_SOMBRA = (359, 118, 152, 337)   # (left, top, larg, alt) em 1280x720 — onde as máscaras valem
 LIMIAR_BORDA_ACESA = 24.0              # borda acima disto = a luz chegou ao corredor
 LIMIAR_SILHUETA_VAZIA = 27.0           # silhueta acima disto (com luz) = corredor vazio
+# TRAVA DE ALINHAMENTO (out/2026). As máscaras só valem com a visão do escritório no extremo
+# esquerdo — onde ela fica quando a luz esquerda está segurada. Com o agente olhando para o centro
+# ou para a direita, a região da janela mostra outra parte da sala, e a leitura vira ruído: girando
+# ~200 px lê "silhueta" (flag acende do nada), 240–300 px lê "vazio" (flag apaga). Num trace de 70
+# noites, 337 das 344 vezes em que a flag acendeu foram com a luz esquerda solta. Trava: o botão
+# LIGHT esquerdo aceso NO LUGAR calibrado (brilho médio da região). Medido: aceso e alinhado 145;
+# apagado 82; visão deslocada 10 px 112 — e até ~5 px as leituras da janela seguem corretas.
+BOTAO_LUZ_ESQ = (36, 405, 38, 85)      # (left, top, larg, alt) em 1280x720, visão no extremo esquerdo
+LIMIAR_BOTAO_LUZ = 115.0
 DEBOUNCE_PRESENCA = 2     # leituras de presença (rosto ou silhueta) p/ setar a ameaça
 _PASTA_SOMBRA = Path(__file__).parent.parent / "utils" / "referencias" / "sombra"
 _cache_mascaras: list = []
@@ -236,11 +245,20 @@ def _mascaras_sombra():
     return _cache_mascaras[0]
 
 
+def luz_esq_alinhada(frame_cinza: np.ndarray) -> bool:
+    """Botão LIGHT esquerdo aceso no lugar calibrado: a luz está segurada E a visão do escritório
+    está no extremo esquerdo (onde as máscaras da janela valem). Pura."""
+    left, top, w, h = BOTAO_LUZ_ESQ
+    reg = frame_cinza[top:top + h, left:left + w]
+    return reg.size > 0 and float(reg.mean()) > LIMIAR_BOTAO_LUZ
+
+
 def ler_janela_sombra(frame_cinza: np.ndarray) -> tuple[float, float] | None:
     """(brilho da borda, brilho da silhueta) na JANELA_SOMBRA de um frame 1280x720 cinza.
-    None se as máscaras não existirem ou o frame não tiver o enquadramento de referência. Pura."""
+    None — sem informação — se a trava de alinhamento falhar (luz solta ou visão girada), se as
+    máscaras não existirem ou se o frame não tiver o enquadramento de referência. Pura."""
     mascaras = _mascaras_sombra()
-    if mascaras is None:
+    if mascaras is None or not luz_esq_alinhada(frame_cinza):
         return None
     left, top, w, h = JANELA_SOMBRA
     reg = frame_cinza[top:top + h, left:left + w]
