@@ -163,10 +163,14 @@ Conclusão: a rajada vale para ler as **câmeras**, e não compra nada para os d
 
 ### Próximos passos, em ordem
 
-0. **(7/out, passa na frente) A decisão de reabrir a porta esquerda.** O Bonnie causa 16 de 18 mortes
-   na N2, quase sempre depois de o agente fechar a porta certa e reabri-la. **Causa achada e corrigida
-   no detector** (§6). Falta: validar ao vivo com o `monitor` e medir com o `jogar` na N2 sobre os
-   modelos atuais. A observação não mudou de formato, então não precisa treinar.
+0. **(out/2026, passa na frente) O Bonnie e a porta esquerda.** A percepção foi corrigida em duas
+   etapas (contagem acumulada e alinhamento da visão, §6). Falta:
+   - **a)** reavaliar o RL 190k na N2 com a trava (`jogar --noite 2 --episodios 20 --trace`): uma
+     variável só, a percepção. A referência é 1/70 e 262 s;
+   - **b)** decidir o retreino **com a percepção certa**. O PPO nunca teve uma flag confiável, então
+     "o PPO não aprende a N2" está em aberto. Candidatos: retomar do 190k com a âncora BC ligada e
+     sem promover a N2 cedo demais, ou BC com demos novas de N2 (a coluna de ameaça das demos
+     antigas foi gravada com o detector quebrado).
 1. **Percepção das câmeras** (adiada: o Foxy causou 1 de 18 mortes), começando pelo estágio do Foxy na CAM 1C, com a rajada de frames.
    Ataca a parede da N2 (falta de informação). Roteiro passo a passo:
    [ROTEIRO_FOXY_CAM1C.md](ROTEIRO_FOXY_CAM1C.md).
@@ -231,6 +235,16 @@ Os porquês, o runbook, os riscos e o glossário estão em
     4 checagens de luz vendo o corredor vazio) ou a política pode ignorá-la. Próximo passo:
     `jogar --trace` + `scripts/analisar_trace.py` para ver, step a step, o que acontece antes de
     cada morte.
+  - **8/out (trace de 70 noites de N2; relatório completo em
+    [analises/2026-10-08_trace_rl190_n2.md](analises/2026-10-08_trace_rl190_n2.md)): a flag era
+    ruído.** 337 dos 344 acendimentos foram com a luz esquerda solta: com o agente olhando para o
+    centro/direita, a região da janela mostra outra parte da sala (girando ~200 px lê "silhueta",
+    240–300 px lê "vazio"). **Corrigido** com uma trava de alinhamento (botão LIGHT aceso no lugar,
+    commit `ec98fc2`). Reconstruída com a trava, a flag fica acesa 15% do tempo (não 73%) e estaria
+    acesa com a porta aberta em 42 das 69 mortes. O agente reage ao Bonnie (fecha em ~2 s), mas
+    **segura a porta só 3 s** (mediana) e reabre com ele lá; deixa a câmera aberta 47% do tempo.
+    A continuação 190k→340k (currículo promoveu aos 218,7k, **sem âncora**) foi de 50% de vitórias
+    geridas a 0 e de 0 a 74% de mortes por energia.
 - **O Freddy está inativo nas noites 1–2.** Conhecimento do jogo, não verificado neste ambiente.
 - **A rajada resolve a estática e o piscar.** Raciocínio sólido, não medido (M4).
 - **Por que o BC deu 68% em agosto e 43% agora.** Mesmo arquivo e mesmo código de ambiente.

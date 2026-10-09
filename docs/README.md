@@ -25,6 +25,7 @@ logs separados por run, [ESTADO_ATUAL.md](ESTADO_ATUAL.md) como fonte única do 
 | [ESTADO_ATUAL.md](ESTADO_ATUAL.md) | 🟢 vivo (set/2026) | **Fonte única do estado do projeto**: runs medidas, correções, lições, plano (Fases 1–3), pendências |
 | [ESTRATEGIA_DEMOS_E_PERCEPCAO.md](ESTRATEGIA_DEMOS_E_PERCEPCAO.md) | 🟢 vivo (set/2026) | **A nova estratégia**: medir antes (Fase 1), percepção robusta contra estática/piscar/movimentos súbitos (Fase 2), off-policy com demos + correções ao vivo (Fase 3) — porquês, runbook, riscos, glossário |
 | [ROTEIRO_FOXY_CAM1C.md](ROTEIRO_FOXY_CAM1C.md) | 🟡 transitório (out/2026) | **Próxima tarefa**: roteiro de mentor para detectar o estágio do Foxy na CAM 1C (coletar, olhar, detector simples, integrar) |
+| [analises/](analises/) | 📊 registros (out/2026) | **Relatórios de análise com os números** de medições cujos dados brutos podem ser apagados (ex.: o trace de 70 noites de N2) |
 | [GUIA_COMANDOS.md](GUIA_COMANDOS.md) | 🟢 vivo (out/2026) | **Guia prático**: o que rodar para cada tarefa (verificar, avaliar, encadear a noite, sonda, gravar demos, BC, treino, git), com o porquê de cada comando |
 | [historico/HANDOFF_FASE1.md](historico/HANDOFF_FASE1.md) | 📦 histórico (set–out/2026) | Prompt das avaliações da Fase 1 em blocos, em 2 PCs. Fase concluída |
 | [PACOTE_BC_ENTROPIA.md](PACOTE_BC_ENTROPIA.md) | 🟢 vivo (jul/2026) | Os mecanismos do pacote BC + entropia: estratégias, runbook gravação→BC→treino, glossário |
