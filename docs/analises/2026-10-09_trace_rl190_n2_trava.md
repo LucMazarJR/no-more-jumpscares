@@ -41,6 +41,14 @@ Na morte: última luz esquerda há 22 s (mediana); porta esquerda aberta há 41 
 3. **Duas classes de morte:** 34/60 com a informação certa e a porta aberta (política); 25/60 com a
    flag apagada (o agente não checou a luz a tempo: última checagem 22 s antes da morte).
 
+## Réplica (09/10, 08:14–12:42, `trace_20261009_0814.csv`)
+
+Mesmo comando e configuração (o `--segurar-porta` ficou de fora por engano), 42 episódios de N2:
+1 vitória (apagão), sobrevivência mediana 283 s, flag acesa 16%, **reaberturas com a flag acesa
+93/105 (89%)**, mortes com a flag acesa e a porta aberta 21/41. Juntando as duas rodadas com a
+trava (102 eps): mediana 302 s contra 262 s sem a trava, **+40 s, p = 0,20** — a melhora de
+sobrevivência não se sustenta; o padrão "reabre sabendo" se repete.
+
 ## Próximo passo proposto
 
 Diagnóstico `jogar --segurar-porta`: ignora "abrir a porta esquerda" enquanto a flag está acesa.
