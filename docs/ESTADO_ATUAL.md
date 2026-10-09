@@ -245,6 +245,13 @@ Os porquês, o runbook, os riscos e o glossário estão em
     **segura a porta só 3 s** (mediana) e reabre com ele lá; deixa a câmera aberta 47% do tempo.
     A continuação 190k→340k (currículo promoveu aos 218,7k, **sem âncora**) foi de 50% de vitórias
     geridas a 0 e de 0 a 74% de mortes por energia.
+  - **9/out (60 noites de N2 com a trava; relatório em
+    [analises/2026-10-09_trace_rl190_n2_trava.md](analises/2026-10-09_trace_rl190_n2_trava.md)):
+    a percepção está resolvida, o problema agora é a política.** Flag acesa 12% do tempo e só com
+    avistamento real; sobrevivência mediana 262 → 314 s (p = 0,08); 0/60 vitórias. **85% das
+    reaberturas da porta esquerda são com a flag acesa**, e 34 das 60 mortes foram com a flag acesa
+    e a porta aberta: o agente sabe que o Bonnie está lá e reabre. As outras 25 são de checagem
+    tardia (flag apagada, última luz 22 s antes). Próximo: diagnóstico `jogar --segurar-porta`.
 - **O Freddy está inativo nas noites 1–2.** Conhecimento do jogo, não verificado neste ambiente.
 - **A rajada resolve a estática e o piscar.** Raciocínio sólido, não medido (M4).
 - **Por que o BC deu 68% em agosto e 43% agora.** Mesmo arquivo e mesmo código de ambiente.
