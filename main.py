@@ -119,7 +119,7 @@ def modo_bc():
 
 
 USO_JOGAR = ("python main.py jogar [--modelo <zip>] [--estocastico] [--noite N] "
-              "[--episodios K] [--ablacao imagem|estados] [--trace]")
+              "[--episodios K] [--ablacao imagem|estados] [--trace] [--segurar-porta]")
 
 
 def _resumo_avaliacao(eps: list[dict]) -> list[str]:
@@ -158,6 +158,10 @@ def modo_jogar():
       --trace          grava CADA step em logs/analise/trace_<data>.csv (ação, portas, luz,
                        leitura da janela do Bonnie, flags, energia) — para ver o que o agente
                        fez antes de cada morte. Analisar com scripts/analisar_trace.py.
+      --segurar-porta  DIAGNÓSTICO (nunca no treino): ignora "abrir a porta esquerda" enquanto a
+                       flag do Bonnie estiver acesa. Mede o teto do que o retreino pode ganhar se
+                       a política aprender a segurar a porta (o RL 190k reabre com a flag acesa em
+                       85% das vezes). A config no log registra a trava.
 
     Cada episódio vai p/ logs/analise/avaliacoes.log (com a configuração no cabeçalho) e o
     desyncs da avaliação p/ logs/analise/avaliacoes_desyncs.log — nada disso se mistura aos
@@ -166,13 +170,17 @@ def modo_jogar():
 
     import numpy as np
 
-    from src.environment.fnaf_env import LIMIAR_BORDA_ACESA, LIMIAR_SILHUETA_VAZIA, RESET_METODO
+    from src.environment.fnaf_env import (ACOES, LIMIAR_BORDA_ACESA, LIMIAR_SILHUETA_VAZIA,
+                                          RESET_METODO)
 
     ablacao = _valor_flag("--ablacao")
     if "--ablacao" in sys.argv and ablacao not in ("imagem", "estados"):
         print("Uso:", USO_JOGAR)
         return
     estocastico = "--estocastico" in sys.argv
+    segurar_porta = "--segurar-porta" in sys.argv
+    ACAO_PORTA_ESQ = next(i for i, n in ACOES.items() if n == "porta_esquerda")
+    ACAO_NADA = next(i for i, n in ACOES.items() if n == "nada")
     noite_alvo = int(_valor_flag("--noite")) if _valor_flag("--noite") else None
     max_eps = int(_valor_flag("--episodios")) if _valor_flag("--episodios") else None
 
@@ -189,6 +197,7 @@ def modo_jogar():
     config = (f"modelo {caminho} | {'LSTM' if usar_lstm else 'PPO'} | "
               f"{'estocástico' if estocastico else 'determinístico'} | "
               f"noite alvo {noite_alvo or '-'} | ablação {ablacao or '-'} | "
+              + ("DIAGNÓSTICO segurar porta | " if segurar_porta else "") +
               f"PC {os.getenv('PC') or '?'} | "
               f"commit {_versao_codigo()} | {datetime.now():%Y-%m-%d %H:%M}")
     print(f"Avaliação: {config}")
@@ -230,6 +239,7 @@ def modo_jogar():
             # Telemetria da janela do Bonnie: o detector vê o corredor iluminado DENTRO do loop
             # do agente (luz apertada e capturada no mesmo step), ou só a transição escura?
             n_luz = n_acesa = n_silhueta = n_flag = 0
+            n_travas = 0                                # reaberturas barradas pelo --segurar-porta
             lstm_states = None                          # estado da LSTM
             ep_start = np.ones((1,), dtype=bool)        # sinaliza início → a LSTM zera o estado
 
@@ -245,6 +255,10 @@ def modo_jogar():
                     ep_start = np.zeros((1,), dtype=bool)
                 else:
                     acao, _ = modelo.predict(obs_pred, deterministic=not estocastico)
+                if (segurar_porta and int(acao) == ACAO_PORTA_ESQ
+                        and env.porta_esq and env.ameaca_esq):
+                    acao = ACAO_NADA          # diagnóstico: não reabre com o Bonnie na porta
+                    n_travas += 1
                 obs, _, terminado, truncado, info = env.step(int(acao))
                 if info.get("acao_nome", "nada") != "nada":
                     n_acoes += 1
@@ -291,7 +305,8 @@ def modo_jogar():
                      f"sobrev {tempo:5.0f}s ({ep['passos']:4d}p) | energia {ep['energia']:5.1f}% | "
                      f"ações/min {ep['acoes_min']:5.1f} | causa {ep['causa']} | "
                      f"luzE {n_luz} (acesa {n_acesa}, silhueta {n_silhueta}) | "
-                     f"flagE {ep['flag_pct']:.0f}%")
+                     f"flagE {ep['flag_pct']:.0f}%"
+                     + (f" | reaberturas barradas {n_travas}" if segurar_porta else ""))
             print(linha)
             log.write(linha + "\n")
             log.flush()
