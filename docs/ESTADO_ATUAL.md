@@ -252,6 +252,12 @@ Os porquês, o runbook, os riscos e o glossário estão em
     reaberturas da porta esquerda são com a flag acesa**, e 34 das 60 mortes foram com a flag acesa
     e a porta aberta: o agente sabe que o Bonnie está lá e reabre. As outras 25 são de checagem
     tardia (flag apagada, última luz 22 s antes). Próximo: diagnóstico `jogar --segurar-porta`.
+  - **9/out — diagnóstico "segurar a porta"** ([relatório](analises/2026-10-09_diagnostico_segurar_porta.md)):
+    barrando a reabertura com a flag acesa (806 tentativas em 50 noites), a sobrevivência na N2 vai a
+    **351 s** (+49 s, p = 0,055) e as mortes "sabendo" caem de 55 para 2, mas as vitórias ficam em
+    2/50. Sobram a **checagem tardia** (46/48 mortes com a flag apagada, ~21 s depois da última luz) e
+    a **energia** (8 mortes por apagão; câmera ~50% do tempo). Proposta de treino do zero em
+    [PROPOSTA_TREINO_DO_ZERO.md](PROPOSTA_TREINO_DO_ZERO.md), para revisão.
 - **O Freddy está inativo nas noites 1–2.** Conhecimento do jogo, não verificado neste ambiente.
 - **A rajada resolve a estática e o piscar.** Raciocínio sólido, não medido (M4).
 - **Por que o BC deu 68% em agosto e 43% agora.** Mesmo arquivo e mesmo código de ambiente.
