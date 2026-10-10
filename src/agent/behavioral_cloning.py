@@ -41,6 +41,26 @@ def _reconstruir_idade_info(dados: list[dict]) -> int:
     return len(dados)
 
 
+def _corrigir_caminhos_frames(dados: list[dict], caminho_json: str) -> int:
+    """O gravador salva o caminho do frame relativo à raiz do projeto ('dados/<pasta>/frames/N.png').
+    Se a pasta da demo foi movida (ex.: dados/_antigas_flag_errada/), procura o frame ao lado do
+    próprio dataset.json. Sem isso o frame some e _imagem_do_frame devolve PRETO em silêncio.
+    Retorna quantos frames continuam faltando (avisa quem chamou)."""
+    pasta_frames = Path(caminho_json).parent / "frames"
+    faltando = 0
+    for d in dados:
+        if not Path(d["frame"]).exists():
+            alternativa = pasta_frames / Path(d["frame"]).name
+            if alternativa.exists():
+                d["frame"] = str(alternativa)
+            else:
+                faltando += 1
+    if faltando:
+        print(f"[BC] AVISO: {faltando}/{len(dados)} frames não encontrados em {caminho_json} "
+              f"(vão entrar como imagem PRETA)")
+    return faltando
+
+
 def _imagem_do_frame(dado: dict) -> np.ndarray:
     """(84,84,1) uint8 — espelha FNAFEnv._capturar_observacao(). Frame ausente = preto."""
     frame = cv2.imread(dado["frame"], cv2.IMREAD_GRAYSCALE)
@@ -80,6 +100,7 @@ class GameplayDataset(Dataset):
         for caminho in caminhos_json:
             with open(caminho, "r") as f:
                 dados = json.load(f)
+                _corrigir_caminhos_frames(dados, caminho)
                 reconstruidos += _reconstruir_idade_info(dados)   # datasets pré-run-3 (12 estados)
                 self.dados.extend(dados)
                 print(f"Carregado: {caminho} ({len(dados)} frames)")
@@ -295,6 +316,7 @@ def _carregar_episodios(caminhos_json: list[str]) -> list[dict]:
     for caminho in sorted(caminhos_json):
         with open(caminho, "r") as f:
             dados = json.load(f)
+        _corrigir_caminhos_frames(dados, caminho)
         _reconstruir_idade_info(dados)   # datasets pré-run-3: reconstrói idade_info_esq/dir
         episodios.append({
             "imagem":  torch.from_numpy(np.stack([_imagem_do_frame(d) for d in dados])),   # (T,84,84,1) uint8
