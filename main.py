@@ -155,7 +155,7 @@ def modo_jogar():
       --episodios K    para após K episódios na noite alvo (ou K no total, sem --noite).
       --ablacao imagem|estados  zera aquele ramo da observação antes do predict (Decisão 5):
                        se zerar a IMAGEM não derruba a vitória, a CNN não está contribuindo.
-      --trace          grava CADA step em logs/analise/trace_<data>.csv (ação, portas, luz,
+      --trace          grava CADA step em logs/analise/trace_<data>_<modelo>.csv (ação, portas, luz,
                        leitura da janela do Bonnie, flags, energia) — para ver o que o agente
                        fez antes de cada morte. Analisar com scripts/analisar_trace.py.
       --segurar-porta  DIAGNÓSTICO (nunca no treino): ignora "abrir a porta esquerda" enquanto a
@@ -220,7 +220,10 @@ def modo_jogar():
     trace = None
     if "--trace" in sys.argv:
         import csv
-        caminho_trace = f"logs/analise/trace_{datetime.now():%Y%m%d_%H%M}.csv"
+        # O modelo vai no nome: blocos intercalados de modelos diferentes geram um trace cada, e o
+        # analisar_trace junta por glob só os de um modelo.
+        sufixo = os.path.splitext(os.path.basename(caminho))[0] + (f"_abl-{ablacao}" if ablacao else "")
+        caminho_trace = f"logs/analise/trace_{datetime.now():%Y%m%d_%H%M}_{sufixo}.csv"
         arq_trace = open(caminho_trace, "w", encoding="utf-8", newline="")
         trace = csv.writer(arq_trace)
         trace.writerow(["ep", "passo", "tempo", "noite", "acao", "acao_valida", "porta_esq",

@@ -9,10 +9,15 @@ updates) cai igual nas três configurações. Bloco que quebra é registrado e o
 3 falhas seguidas encerram tudo.
 
 Uso (de um PowerShell, na raiz do projeto, com o jogo FECHADO ou no menu):
-    venv\\Scripts\\python scripts\\rodar_fase1.py                       # 4 rodadas: M1, M2, RL
-    venv\\Scripts\\python scripts\\rodar_fase1.py --rodadas 3 --sem-rl
-    venv\\Scripts\\python scripts\\rodar_fase1.py --ate 18:00           # não começa bloco que passe disso
-    venv\\Scripts\\python scripts\\rodar_fase1.py --blocos M1,RL,RL340  # curva BC → 190k → 340k
+    python scripts/rodar_fase1.py                       # 4 rodadas: M1, M2, RL
+    python scripts/rodar_fase1.py --rodadas 3 --sem-rl
+    python scripts/rodar_fase1.py --ate 18:00           # não começa bloco que passe disso
+    python scripts/rodar_fase1.py --blocos M1,RL,RL340  # curva BC → 190k → 340k
+    python scripts/rodar_fase1.py --blocos BC,M1 --trace --ate 08:00            # BC novo × antigo, N1
+    python scripts/rodar_fase1.py --blocos BC,M1 --noite 2 --trace --ate 08:00  # idem na N2
+
+Blocos: BC = modelos/fnaf_bc.zip (o BC atual); M1/M2 = o BC da Fase 1 (com/sem imagem), guardado
+em modelos/pc_luciano_run4/; RL/RL340 = run 4.
 
 Saídas: logs/analise/avaliacoes.log (resultados, lido pelo resumo_avaliacoes.py),
 logs/analise/fase1_blocos.txt (console de todos os blocos + tracebacks), debug/fase1_bloco_<n>.png.
@@ -40,8 +45,11 @@ sys.path.insert(0, RAIZ)
 from src.environment.fnaf_env import GAME_EXECUTABLE_PATH, RESET_METODO, WINDOW_TITLE  # noqa: E402
 
 PYTHON = os.path.join("venv", "Scripts", "python.exe")
-BC = os.path.join("modelos", "fnaf_bc.zip")
+# BC da Fase 1 (demos com a flag errada), guardado ao lado da run 4; o hash garante que M1/M2
+# continuam medindo o MESMO arquivo das avaliações de set–out/2026.
+BC_ANTIGO = os.path.join("modelos", "pc_luciano_run4", "fnaf_bc_flag_errada.zip")
 BC_SHA256 = "74436089BB1AA395FB4D28FBA683FCF9558F3C152EFE8E1FD3F3B0E176DCFF70"
+BC = os.path.join("modelos", "fnaf_bc.zip")   # o BC atual (o que o `main.py bc` gerou por último)
 RL = os.path.join("modelos", "pc_luciano_run4", "pc4_fnaf_ppo_190000_steps.zip")  # fim da run 4
 # Continuação da run 4 (10–11/ago, ~150k steps sem log): mede se o PPO seguiu subindo ou estagnou.
 RL340 = os.path.join("modelos", "pc_luciano_run4", "pc4_fnaf_ppo_340000_steps.zip")
@@ -51,8 +59,9 @@ JANELA_CALIBRADA = (312, 160)    # canto da janela do jogo em modo janela nessa 
 DURACAO_BLOCO = timedelta(minutes=75)  # 5 eps de N1 + os de N2 de brinde, com folga
 
 CONFIGS = {
-    "M1": [BC],
-    "M2": [BC, "--ablacao", "imagem"],
+    "BC": [BC],
+    "M1": [BC_ANTIGO],
+    "M2": [BC_ANTIGO, "--ablacao", "imagem"],
     "RL": [RL],
     "RL340": [RL340],
 }
@@ -74,14 +83,15 @@ def checar_ambiente(ordem: list[str]) -> list[str]:
         erros.append(f"FNAF_RESET_METODO={RESET_METODO} no .env (precisa ser continue).")
     if not (os.getenv("PC") or "").strip():
         erros.append("PC vazio no .env.")
-    with open(BC, "rb") as f:
-        if hashlib.sha256(f.read()).hexdigest().upper() != BC_SHA256:
-            erros.append(f"hash do {BC} diferente do BC da Fase 1.")
     # Todo modelo da fila precisa existir ANTES de começar: um checkpoint faltando só quebraria
     # horas depois, no bloco dele, com a máquina sozinha.
     for nome in dict.fromkeys(ordem):
         if not os.path.exists(CONFIGS[nome][0]):
             erros.append(f"{CONFIGS[nome][0]} não existe (bloco {nome}).")
+    if ({"M1", "M2"} & set(ordem)) and os.path.exists(BC_ANTIGO):
+        with open(BC_ANTIGO, "rb") as f:
+            if hashlib.sha256(f.read()).hexdigest().upper() != BC_SHA256:
+                erros.append(f"hash do {BC_ANTIGO} diferente do BC da Fase 1.")
     return erros
 
 
@@ -136,9 +146,11 @@ def preparar_jogo(n_bloco: int) -> bool:
     return False
 
 
-def rodar_bloco(n: int, nome: str, episodios: int) -> int:
+def rodar_bloco(n: int, nome: str, episodios: int, noite: int, trace: bool) -> int:
     cmd = [PYTHON, "-u", "main.py", "jogar", "--modelo", *CONFIGS[nome],
-           "--estocastico", "--noite", "1", "--episodios", str(episodios)]
+           "--estocastico", "--noite", str(noite), "--episodios", str(episodios)]
+    if trace:
+        cmd.append("--trace")
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
     with open(LOG, "a", encoding="utf-8") as f:
         f.write(f"\n----- bloco {n} {nome}: {' '.join(cmd)}\n")
@@ -160,6 +172,8 @@ def main() -> None:
     ap.add_argument("--blocos", help=f"ordem de UMA rodada, separada por vírgula (opções: "
                                      f"{', '.join(CONFIGS)}); ex.: M1,RL,RL340")
     ap.add_argument("--ate", help="HH:MM: não começa bloco que termine depois disso")
+    ap.add_argument("--noite", type=int, default=1, help="noite alvo de cada bloco (default 1)")
+    ap.add_argument("--trace", action="store_true", help="passa --trace ao jogar (CSV por step)")
     args = ap.parse_args()
 
     os.makedirs("debug", exist_ok=True)
@@ -184,7 +198,8 @@ def main() -> None:
             print("[ERRO]", e)
         sys.exit(1)
 
-    registrar(f"=== Fase 1: {len(fila)} blocos {fila} | PC {os.getenv('PC')} | até {limite or '-'}")
+    registrar(f"=== {len(fila)} blocos {fila} | noite {args.noite}{' | trace' if args.trace else ''} "
+              f"| PC {os.getenv('PC')} | até {limite or '-'}")
     falhas_seguidas = 0
     try:
         for n, nome in enumerate(fila, 1):
@@ -196,7 +211,7 @@ def main() -> None:
                 registrar("  não consegui deixar o jogo em modo janela; encerrando")
                 break
             inicio = time.time()
-            codigo = rodar_bloco(n, nome, args.episodios)
+            codigo = rodar_bloco(n, nome, args.episodios, args.noite, args.trace)
             pyautogui.mouseUp()  # se o bloco caiu segurando a luz, solta o botão
             registrar(f"bloco {n} {nome}: saída {codigo} em {(time.time() - inicio) / 60:.0f} min")
             falhas_seguidas = falhas_seguidas + 1 if codigo != 0 else 0
