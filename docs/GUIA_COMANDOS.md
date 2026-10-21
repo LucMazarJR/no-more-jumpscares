@@ -115,14 +115,22 @@ python -m src.utils.gravar_gameplay --noite 2
 
 Leve o jogo até a noite, aperte **F9** para começar, jogue **pelas teclas** (a lista aparece no
 terminal) e aperte **F10** no 6 AM. Uma noite por gravação. Vai para `dados/gameplay_<data>_noiteN/`.
+Se morrer, aperte **F10 logo**: o gravador não detecta a morte e grava a tela de game over como jogo.
 
 Teclas: `A`/`D` portas, `Q`/`E` luzes, `Tab` abre/fecha a câmera, `1`–`0` e `-` escolhem a câmera.
 
 **Como jogar as demos** (o BC copia o que você faz, então o que importa é o hábito):
 - **Segure a porta esquerda fechada enquanto o Bonnie estiver lá.** Só reabra depois de acender a
   luz e ver o corredor vazio. É o erro nº 1 do agente atual.
+- **Antes de reabrir, deixe a luz acesa 1–2 s.** O detector só dá "vazio" depois de algumas
+  leituras seguidas com a luz acesa. Com uma piscada, a flag continua acesa, e a demo grava
+  "abriu com o Bonnie marcado", justamente o erro que queremos tirar do agente.
 - **Cheque a luz esquerda a cada poucos segundos**, não só quando "der vontade": as mortes que
   sobram vêm ~20 s depois da última olhada.
+- **Cheque a luz direita também, a cada ~20–30 s, mesmo vendo a Chica na câmera.** Jogue com a
+  informação que o agente tem: ele não sabe onde a Chica está pela câmera (nenhum estado diz isso,
+  e a imagem 84×84 quase não ajuda), e a idade da informação da direita só zera com a luz direita.
+  Se você deixar de checar porque a viu no salão, o BC aprende "não checar a direita" sem o motivo.
 - **Pouca câmera.** Câmera aberta gasta energia; o agente atual fica nela metade do tempo.
 - Não precisa vencer. Morrer jogando com esses hábitos ainda ensina.
 
