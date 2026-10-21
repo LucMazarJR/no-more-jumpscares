@@ -25,7 +25,8 @@ Guia de uso para o dia a dia (o que rodar para cada tarefa e por quê):
 
 Verificação offline (sem o jogo), todos devem passar: `scripts/smoke_test.py` ·
 `-m src.utils.testar_recompensa` · `-m src.utils.testar_noite` · `-m src.utils.testar_deteccao_ameaca`
-· `-m src.utils.testar_masking` (LSTM) · `-m src.utils.testar_callbacks_treino` (termostato e currículo).
+· `-m src.utils.testar_masking` (LSTM) · `-m src.utils.testar_callbacks_treino` (termostato e currículo)
+· `-m src.utils.testar_sync_camera` (câmera abaixada pelo jogo).
 
 ## Mapa de pastas (⚠ = caminho hardcoded em código, não mover)
 

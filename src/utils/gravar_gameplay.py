@@ -19,6 +19,8 @@ uma cópia paralela da mecânica para dessincronizar. Também espelhado do step(
     vê — e requisito da detecção da Chica) + re-sync passivo da porta do mesmo lado;
   • energia simulada re-ancorada pela FOTO (`_ler_energia` + validar_leitura_energia);
   • ameaças rotuladas por `_atualizar_ameaca` (mesmos templates/debounce do treino);
+  • câmera ressincronizada pelo "YOU" do mapa (`_sincronizar_camera`): o Foxy batendo na
+    porta abaixa a prancheta sem nenhuma tecla;
   • rotulagem SEM shift: registro = (frame_t, ação decidida VENDO frame_t).
 
 THREADING: handlers do `keyboard` rodam na thread de hook e o mss/pyautogui não são
@@ -189,6 +191,13 @@ def gravar():
             frame_cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             frame_ref   = cv2.resize(frame_cinza, env._ref_size)
             frame_pequeno = cv2.resize(frame_ref, (84, 84))
+
+            # (d2) Câmera pelo "YOU" do mapa (mesma regra do step). O jogo abaixa a prancheta
+            # sozinho quando o Foxy bate na porta; sem isto o estado ficava "aberta", porta e
+            # luz eram recusadas e o próximo Tab invertia tudo. Aqui a cada iteração (0,25 s).
+            if env._sincronizar_camera(frame):
+                print(f"  [sync] câmera {'aberta' if env.camera_aberta else 'fechada'} pelo jogo"
+                      f" — estado corrigido")
 
             # (e) Ameaças pela implementação do treino (estado HELD dentro do env).
             env._atualizar_ameaca(frame_ref)

@@ -296,6 +296,31 @@ def decidir_bonnie(ameaca: bool, n_presenca: int, n_vazio: int, rosto: float,
         return ameaca, n_presenca, n_vazio, True
     return ameaca, n_presenca, n_vazio, False
 
+
+# Estado real da CÂMERA pelo indicador "YOU" do mapa (template camera_aberta.png). Além dos
+# toggles perdidos, o PRÓPRIO JOGO abaixa a prancheta quando o Foxy bate na porta: na demo de N2
+# de 21/out (458,9 s) a tela voltou ao escritório e o estado ficou "aberta" por 7 s, com porta e
+# luz bloqueadas (_executar_acao as recusa com a câmera aberta).
+DISCORDANCIA_SYNC_CAMERA = 2   # leituras SEGUIDAS discordando para corrigir (absorve um frame ruim)
+
+
+def decidir_sync_camera(acreditada: bool, real: bool | None,
+                        discordancia: int) -> tuple[bool, int, bool]:
+    """Atualiza o estado da câmera a partir de UMA leitura do template. Pura — testável offline e
+    compartilhada pelo step() e pelo gravador de gameplay.
+
+    `real` = _camera_aberta_por_template (None = sem template: mantém tudo).
+    Retorna (camera_aberta, discordancia, corrigiu). Concordar zera a contagem."""
+    if real is None:
+        return acreditada, discordancia, False
+    if real == acreditada:
+        return acreditada, 0, False
+    discordancia += 1
+    if discordancia < DISCORDANCIA_SYNC_CAMERA:
+        return acreditada, discordancia, False
+    return real, 0, True
+
+
 # Estado real da PORTA pela cor do botão DOOR do painel (HUD) — Decisão 4B, mesma convenção
 # do _verificar_botao_porta:  verde (G>R) = FECHADA, vermelho (R>G) = ABERTA. Usado p/ o Φ do
 # shaping (bloqueado = ameaça presente E porta fechada). Regiões em 1280x720 (left,top,larg,alt).
@@ -451,16 +476,33 @@ class FNAFEnv(gym.Env):
         import pygetwindow as gw
         return bool(gw.getWindowsWithTitle(WINDOW_TITLE))
 
-    def _camera_aberta_por_template(self) -> bool | None:
+    def _camera_aberta_por_template(self, frame=None) -> bool | None:
         """Verifica estado real da câmera via matchTemplate no indicador 'YOU' do mapa.
-        Retorna None se o template não foi carregado."""
+        `frame` (BGR, resolução nativa) evita uma captura extra. Retorna None se o template
+        não foi carregado."""
         if self.template_camera_aberta is None:
             return None
-        frame = self.capture.capturar_tela()
+        if frame is None:
+            frame = self.capture.capturar_tela()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         resultado = cv2.matchTemplate(gray, self.template_camera_aberta, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, _ = cv2.minMaxLoc(resultado)
         return max_val > 0.75
+
+    def _sincronizar_camera(self, frame=None) -> bool:
+        """Corrige camera_aberta pelo 'YOU' do mapa (decidir_sync_camera). Não lê durante o
+        cooldown da prancheta: no meio da animação o 'YOU' some/aparece e geraria correção
+        falsa. Retorna True se corrigiu."""
+        if self.template_camera_aberta is None or self.cooldown_camera > 0:
+            return False
+        real = self._camera_aberta_por_template(frame)
+        self.camera_aberta, self._template_camera_discordancia, corrigiu = decidir_sync_camera(
+            self.camera_aberta, real, self._template_camera_discordancia)
+        if corrigiu:
+            if not self.camera_aberta:
+                self.camera_ativa = 0
+            self._count_sync_camera += 1
+        return corrigiu
 
     def _verificar_botao_porta(self, nome_acao: str) -> bool:
         """Verifica se o clique de porta registrou pelo delta de cor do botão (vermelho↔verde).
@@ -824,20 +866,12 @@ class FNAFEnv(gym.Env):
             return self._interromper_episodio("janela fechada (Golden Freddy)", como_morte=True)
 
         # ── Verificação de sincronia via template "YOU" do mapa de câmeras ────
-        # Checado a cada 3 steps, apenas fora do cooldown (evita falsa correção
-        # durante a animação de abertura/fechamento da tablet).
-        if self.template_camera_aberta is not None and self.passos % 3 == 0 and self.cooldown_camera == 0:
-            real = self._camera_aberta_por_template()
-            if real is not None and real != self.camera_aberta:
-                self._template_camera_discordancia += 1
-                if self._template_camera_discordancia >= 2:
-                    self.camera_aberta = real
-                    if not real:
-                        self.camera_ativa = 0
-                    self._count_sync_camera += 1
-                    self._template_camera_discordancia = 0
-            else:
-                self._template_camera_discordancia = 0
+        # Acreditando "aberta": a TODO step. O jogo abaixa a prancheta sozinho quando o Foxy
+        # bate na porta, e até corrigir porta e luz ficam bloqueadas (a cada 3 steps eram
+        # ~3–5 s sem poder fechar porta). Acreditando "fechada" (só um toggle perdido leva a
+        # isso), a cada 3 steps como antes, para não pagar a captura extra sempre.
+        if self.camera_aberta or self.passos % 3 == 0:
+            self._sincronizar_camera()
 
         # ─────────────────────────────────────────────────────────────────────
 

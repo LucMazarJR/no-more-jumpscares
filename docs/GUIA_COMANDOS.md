@@ -28,6 +28,7 @@ python -m src.utils.testar_noite
 python -m src.utils.testar_deteccao_ameaca
 python -m src.utils.testar_masking
 python -m src.utils.testar_callbacks_treino
+python -m src.utils.testar_sync_camera
 ```
 
 **GPU (uma vez por PC):** o BC, o treino e o DQfD usam a placa se o PyTorch tiver CUDA. Confira:
