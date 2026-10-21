@@ -25,7 +25,7 @@ logs separados por run, [ESTADO_ATUAL.md](ESTADO_ATUAL.md) como fonte única do 
 | [ESTADO_ATUAL.md](ESTADO_ATUAL.md) | 🟢 vivo (set/2026) | **Fonte única do estado do projeto**: runs medidas, correções, lições, plano (Fases 1–3), pendências |
 | [ESTRATEGIA_DEMOS_E_PERCEPCAO.md](ESTRATEGIA_DEMOS_E_PERCEPCAO.md) | 🟢 vivo (set/2026) | **A nova estratégia**: medir antes (Fase 1), percepção robusta contra estática/piscar/movimentos súbitos (Fase 2), off-policy com demos + correções ao vivo (Fase 3) — porquês, runbook, riscos, glossário |
 | [ROTEIRO_FOXY_CAM1C.md](ROTEIRO_FOXY_CAM1C.md) | 🟡 transitório (out/2026) | **Próxima tarefa**: roteiro de mentor para detectar o estágio do Foxy na CAM 1C (coletar, olhar, detector simples, integrar) |
-| [PROPOSTA_TREINO_DO_ZERO.md](PROPOSTA_TREINO_DO_ZERO.md) | 🟡 em revisão (out/2026) | **Proposta do treino do zero** com a percepção corrigida: demos novas, BC novo, RL em dois braços (RecurrentPPO e DQfD), critérios de sucesso e aborto |
+| [PROPOSTA_TREINO_DO_ZERO.md](PROPOSTA_TREINO_DO_ZERO.md) | 🟢 aprovada (out/2026) | **O plano em execução**: treino do zero com a percepção corrigida (demos novas, BC novo, RL em dois braços: RecurrentPPO e DQfD), critérios de sucesso e aborto, decisões e andamento |
 | [analises/](analises/) | 📊 registros (out/2026) | **Relatórios de análise com os números** de medições cujos dados brutos podem ser apagados (ex.: o trace de 70 noites de N2) |
 | [GUIA_COMANDOS.md](GUIA_COMANDOS.md) | 🟢 vivo (out/2026) | **Guia prático**: o que rodar para cada tarefa (verificar, avaliar, encadear a noite, sonda, gravar demos, BC, treino, git), com o porquê de cada comando |
 | [historico/HANDOFF_FASE1.md](historico/HANDOFF_FASE1.md) | 📦 histórico (set–out/2026) | Prompt das avaliações da Fase 1 em blocos, em 2 PCs. Fase concluída |
@@ -65,6 +65,7 @@ Os comandos completos estão no [README](../README.md) e no [VALIDACAO_E_TESTES.
 - `testar_noite` — lógica de reset/currículo (`decidir_reset`, 11 casos)
 - `testar_deteccao_ameaca` / `testar_deteccao_energia` — detectores contra fixtures de `debug/`
 - `testar_masking` / `sonda_memoria` — LSTM (reset de memória / uso de recorrência) — p/ o A/B futuro
+- `testar_callbacks_treino` — termostato de entropia (calibração pelo BC) e currículo por vitórias geridas
 - `simular_energia` — modelo de dreno de energia vs o jogo real
 - `ablacao_offline` — a CNN contribui? (exige modelo treinado)
 - `scripts/smoke_test.py` — env + extractor + predict sem o jogo
@@ -74,5 +75,8 @@ Os comandos completos estão no [README](../README.md) e no [VALIDACAO_E_TESTES.
 - `metricas_treino` — win rate/sobrevivência/causas por noite (lê `logs/analise/treino_detalhado.log`;
   runs passadas: `--log logs/analise/historico/<run>_detalhado.log`)
 - `taxa_acao` — ações/min das demos humanas × do agente avaliado (`main.py jogar`) — medição M3
+- `analisar_trace` — o trace por step do `jogar --trace`: flag do Bonnie, o que houve antes de cada
+  morte, reaberturas da porta com a flag acesa e duração da porta fechada
+- `rodar_fase1` — blocos de `jogar` intercalados entre modelos, a noite inteira, reabrindo o jogo
 - `enviar_logs_mongodb` / `exportar_logs_xlsx` / `limpar_banco` — pipeline MongoDB/Excel (2 PCs)
 - `bump_version` — versionamento (`VERSION` + `src/version.py`)

@@ -27,6 +27,19 @@ python -m src.utils.testar_recompensa
 python -m src.utils.testar_noite
 python -m src.utils.testar_deteccao_ameaca
 python -m src.utils.testar_masking
+python -m src.utils.testar_callbacks_treino
+```
+
+**GPU (uma vez por PC):** o BC, o treino e o DQfD usam a placa se o PyTorch tiver CUDA. Confira:
+
+```
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+```
+
+Se sair `+cpu` ou `False`, instale a versão com CUDA 12.8 (placas RTX 50xx; ~2,8 GB):
+
+```
+python -m pip install "torch==2.11.0+cu128" --index-url https://download.pytorch.org/whl/cu128
 ```
 
 **Com o jogo aberto:** confirma que a captura e o reset funcionam neste PC.
@@ -62,18 +75,23 @@ python main.py jogar --modelo modelos/fnaf_bc.zip --estocastico --noite 1 --epis
 - `--noite 1 --episodios 5`: mira a Noite 1 e para depois de 5 episódios dela. Cada vitória rende
   um episódio de Noite 2 de brinde.
 - `--ablacao imagem`: zera a imagem para medir se a CNN ajuda.
-- `--trace`: grava cada step num CSV (`logs/analise/trace_<data>.csv`). Depois,
+- `--trace`: grava cada step num CSV (`logs/analise/trace_<data>_<modelo>.csv`). Depois,
   `python scripts/analisar_trace.py --detalhe 12` mostra o que o agente fazia antes de cada morte
-  (porta, luz, leitura da janela do Bonnie, flag) e se ele abriu a porta com a flag acesa.
+  (porta, luz, leitura da janela do Bonnie, flag) e, na seção 4, quantas reaberturas da porta
+  esquerda foram com a flag acesa e quanto tempo a porta fica fechada.
+- Vários traces de um modelo só: `python scripts/analisar_trace.py "logs/analise/trace_*_fnaf_bc.csv" --noite 1`.
+  O nome do modelo no arquivo é o que impede misturar modelos.
 
 **A noite inteira, sem você** (intercalando modelos, que é o único jeito justo de comparar):
 
 ```
-python scripts/rodar_fase1.py --blocos M1,RL,RL340 --rodadas 4 --ate 08:00
+python scripts/rodar_fase1.py --blocos BC,M1 --trace --ate 08:00
 ```
 
-- `--blocos`: a ordem de uma rodada. Opções: `M1` (BC), `M2` (BC sem imagem), `RL` (run 4, 190k),
-  `RL340` (run 4, 340k). Para outro modelo, adicione-o em `CONFIGS` no script.
+- `--blocos`: a ordem de uma rodada. Opções: `BC` (o `modelos/fnaf_bc.zip` atual), `M1` (BC da
+  Fase 1), `M2` (BC da Fase 1 sem imagem), `RL` (run 4, 190k), `RL340` (run 4, 340k). Para outro
+  modelo, adicione-o em `CONFIGS` no script.
+- `--noite 2`: blocos de N2 em vez de N1. `--trace`: um trace por bloco.
 - `--ate`: não começa um bloco que terminaria depois dessa hora. Cada bloco leva ~50–60 min.
 - Teste rápido sem abrir o jogo: `--rodadas 0` (só faz as checagens).
 
@@ -98,26 +116,52 @@ python -m src.utils.gravar_gameplay --noite 2
 Leve o jogo até a noite, aperte **F9** para começar, jogue **pelas teclas** (a lista aparece no
 terminal) e aperte **F10** no 6 AM. Uma noite por gravação. Vai para `dados/gameplay_<data>_noiteN/`.
 
+Teclas: `A`/`D` portas, `Q`/`E` luzes, `Tab` abre/fecha a câmera, `1`–`0` e `-` escolhem a câmera.
+
+**Como jogar as demos** (o BC copia o que você faz, então o que importa é o hábito):
+- **Segure a porta esquerda fechada enquanto o Bonnie estiver lá.** Só reabra depois de acender a
+  luz e ver o corredor vazio. É o erro nº 1 do agente atual.
+- **Cheque a luz esquerda a cada poucos segundos**, não só quando "der vontade": as mortes que
+  sobram vêm ~20 s depois da última olhada.
+- **Pouca câmera.** Câmera aberta gasta energia; o agente atual fica nela metade do tempo.
+- Não precisa vencer. Morrer jogando com esses hábitos ainda ensina.
+
+Se errar algo grave numa gravação (ex.: o jogo travou), apague a pasta dela em `dados/`.
+
 ```
 python main.py bc
 ```
 
 Treina o BC com todos os `dados/*/dataset.json` e gera `modelos/fnaf_bc.zip`. **Atenção:** isso
-substitui o BC atual. Faça uma cópia antes se quiser comparar.
+substitui o BC atual. O BC da Fase 1 já está guardado em
+`modelos/pc_luciano_run4/fnaf_bc_flag_errada.zip`; as demos antigas estão em
+`dados/_antigas_flag_errada/`, fora do treino.
 
 ## 6. Treinar
 
-O PPO não é o caminho atual (ver ESTADO_ATUAL §1). Fica aqui para referência.
+Braço A do treino do zero (RecurrentPPO a partir do BC novo; ver
+[PROPOSTA_TREINO_DO_ZERO.md](PROPOSTA_TREINO_DO_ZERO.md)):
 
 ```
-python main.py treino --novo --bc modelos/fnaf_bc.zip --nome <tag>
+python main.py treino --novo --bc modelos/fnaf_bc.zip --nome bc_novo
 python main.py treino
 ```
 
 - O primeiro começa uma run nova a partir do BC. Ela ganha um nome
   (`AAAA-MM-DD_runN_<algo>_<tag>`), e os logs da run anterior vão para o histórico.
-- O segundo retoma a run atual do maior checkpoint.
+- O segundo retoma a run atual do maior checkpoint de `modelos/` (os da run 4 estão numa subpasta
+  e não entram).
 - Segure **F12** para pausar.
+
+O que esperar:
+- **Os primeiros ~40k steps (~10 h) são warmup:** o ator fica quase parado enquanto o crítico
+  aprende. Não é travamento.
+- **No fim do warmup** aparece `[entropia] alvo calibrado pelo BC: ...`: o termostato passa a
+  mirar a entropia que o BC entregou no jogo. Esse valor fica salvo no checkpoint.
+- **O currículo só promove para a N2 com ≥ 50% de vitórias geridas** em 30 eps de N1. O resumo
+  `[POR NOITE]` mostra `vit (gerida)`.
+- Os critérios de sucesso e de aborto estão na §4 da proposta. Meça em checkpoints com
+  `jogar --estocastico --trace`, nunca pelo log do treino.
 
 ## 7. Git e os 2 PCs
 

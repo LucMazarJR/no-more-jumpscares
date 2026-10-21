@@ -22,9 +22,13 @@
    **causa** das conclusões sobre o PPO fica em aberto: a degradação do 340k (defender demais e
    gastar energia) é o que um agente aprenderia se a flag mentisse. E a coluna de ameaça das demos
    humanas também foi gravada com a lógica antiga (os frames 84×84 não permitem recalcular).
-5. **Decisão (out/2026, a reavaliar depois do teste da correção):** parar de investir no PPO. Seguir para percepção robusta (Fase 2) e
-   aprendizado off-policy com demos permanentes (Fase 3). Detalhes em
-   [ESTRATEGIA_DEMOS_E_PERCEPCAO.md](ESTRATEGIA_DEMOS_E_PERCEPCAO.md).
+5. **Percepção do Bonnie corrigida (7–9/out)** e diagnóstico da política: o RL 190k reabre a porta
+   com a flag acesa em 85–89% das vezes. Barrar essa reabertura leva a N2 de 302 a 351 s (§6).
+6. **Decisão (9/out): treino do zero com a percepção certa**, conforme
+   [PROPOSTA_TREINO_DO_ZERO.md](PROPOSTA_TREINO_DO_ZERO.md): demos novas → BC novo → RL em dois
+   braços (A: RecurrentPPO com âncora; B: DQfD). O 190k e as 8 demos antigas saem: aprenderam com a
+   flag quebrada. A decisão anterior ("parar o PPO") foi tirada com o sensor quebrado; o PPO volta
+   como braço A, e o DQfD como B para comparar.
 
 ## 2. As runs de treino, medidas nos logs
 
@@ -163,21 +167,22 @@ Conclusão: a rajada vale para ler as **câmeras**, e não compra nada para os d
 
 ### Próximos passos, em ordem
 
-0. **(out/2026, passa na frente) O Bonnie e a porta esquerda.** A percepção foi corrigida em duas
-   etapas (contagem acumulada e alinhamento da visão, §6). Falta:
-   - **a)** reavaliar o RL 190k na N2 com a trava (`jogar --noite 2 --episodios 20 --trace`): uma
-     variável só, a percepção. A referência é 1/70 e 262 s;
-   - **b)** decidir o retreino **com a percepção certa**. O PPO nunca teve uma flag confiável, então
-     "o PPO não aprende a N2" está em aberto. Candidatos: retomar do 190k com a âncora BC ligada e
-     sem promover a N2 cedo demais, ou BC com demos novas de N2 (a coluna de ameaça das demos
-     antigas foi gravada com o detector quebrado).
-1. **Percepção das câmeras** (adiada: o Foxy causou 1 de 18 mortes), começando pelo estágio do Foxy na CAM 1C, com a rajada de frames.
-   Ataca a parede da N2 (falta de informação). Roteiro passo a passo:
-   [ROTEIRO_FOXY_CAM1C.md](ROTEIRO_FOXY_CAM1C.md).
-2. **DQfD validado offline** só com as demos: tem que igualar o BC em acurácia na validação.
-   Ataca o esquecimento visto no 340k.
-3. **Treino do zero** com a observação nova (Fase 2) e o DQfD (Fase 3), mais correções ao vivo na
-   N2 (HG-DAgger).
+Treino do zero com a percepção corrigida, etapas e critérios em
+[PROPOSTA_TREINO_DO_ZERO.md](PROPOSTA_TREINO_DO_ZERO.md):
+
+0. ~~**GPU**~~ (9/out): PyTorch com CUDA 12.8 instalado no venv do pc4 (RTX 5060). O outro PC
+   precisa do mesmo comando ([GUIA_COMANDOS.md](GUIA_COMANDOS.md)).
+1. **Demos novas** (usuário): 3× N1, 6–8× N2, 2× N3, com a disciplina do diagnóstico (segurar a porta
+   enquanto o Bonnie estiver lá, checar a luz esquerda a cada poucos segundos, pouca câmera).
+2. **BC novo** (`main.py bc`) e avaliação com `jogar --estocastico --trace`: N1 ≥ 40% e reaberturas
+   com a flag acesa < 50%.
+3. **Braço A, RecurrentPPO**, a partir do BC novo. Código pronto (9/out): âncora BC ligada, alvo de
+   entropia calibrado pela H que o BC entrega no warmup, currículo promovendo só por vitórias
+   **geridas**.
+4. **Braço B, DQfD**: implementar e validar offline com as demos novas (tem de igualar o BC) enquanto
+   o A roda. Não dá para validar antes de as demos existirem.
+5. Depois: correções ao vivo na N2 (HG-DAgger) e a percepção das câmeras, começando pelo Foxy na
+   CAM 1C ([ROTEIRO_FOXY_CAM1C.md](ROTEIRO_FOXY_CAM1C.md); adiada porque o Foxy causou 1 de 18 mortes).
 
 O antigo passo "rajada só nos detectores" saiu: o M4 mostrou que o escritório não tem estática.
 
@@ -264,6 +269,12 @@ Os porquês, o runbook, os riscos e o glossário estão em
 
 ## 7. Pendências
 
+- **Arquivos fora de uso (9/out, git-ignorados):** as 8 demos antigas estão em
+  `dados/_antigas_flag_errada/` (fora do glob `dados/*/dataset.json` do BC e da âncora; para reusar,
+  mova de volta). O RL 190k/340k e o BC antigo (cópia `fnaf_bc_flag_errada.zip`) estão em
+  `modelos/pc_luciano_run4/`, fora da retomada automática.
+- **O `.git` tem ~1,9 GB de checkpoints** commitados em branches antigos (pc1–pc4, union, record,
+  3.0). Apagar esses branches reduz o repo, mas é irreversível: só com decisão do usuário.
 - **Noites 6/7** têm botões de menu próprios (o Continue não chega nelas). Calibrar quando a N5
   estiver dominada.
 - **`morte_animatronico` é genérico** (não diz quem matou). Hoje só se sabe assistindo o vídeo.

@@ -1,6 +1,6 @@
 # Proposta — treino do zero com a percepção corrigida (out/2026)
 
-> **Para revisão do usuário** (decisões em aberto marcadas com ❓). Baseada em
+> **Aprovada em 9/out** (decisões na §5). Baseada em
 > [analises/2026-10-09_diagnostico_segurar_porta.md](analises/2026-10-09_diagnostico_segurar_porta.md)
 > e nas análises anteriores. Preferência registrada do usuário: **maior chance de sucesso, mesmo que
 > leve mais tempo**; não precisa reaproveitar o 190k.
@@ -33,9 +33,10 @@ já muda muita coisa, e o diagnóstico mostrou que a informação necessária j�
 
 ## 3. Etapas
 
-**Etapa 0 — GPU (minutos, precisa de aprovação).** Instalar o PyTorch com CUDA 12.8 (RTX 5060):
-`pip install torch --index-url https://download.pytorch.org/whl/cu128` (~3 GB). Conferir com o
-smoke test e medir o BC na GPU. Sem isso o DQfD (Etapa 3B) disputaria a CPU com o jogo.
+**Etapa 0 — GPU (minutos).** Instalar o PyTorch com CUDA 12.8 (RTX 5060):
+`python -m pip install "torch==2.11.0+cu128" --index-url https://download.pytorch.org/whl/cu128`
+(~2,8 GB). Conferir com o smoke test e medir o BC na GPU. Sem isso o DQfD (Etapa 3B) disputaria a
+CPU com o jogo.
 
 **Etapa 1 — demos novas (precisa de você; ~2–3 h somando sessões).** `gravar_gameplay` já usa a
 percepção nova, então a flag sai certa. Sugestão: 3× N1, **6–8× N2**, 2× N3. Na N2, jogar com a
@@ -77,13 +78,28 @@ Medidos com `jogar --trace` em checkpoints (sem misturar com o log de treino).
 **Aborto:** N1 com vitórias geridas < 25% numa janela cheia (30 eps) depois de 50k steps; ou
 entropia < 0,4 com o `ent_coef` no teto; ou mortes por energia > 50% na N1.
 
-## 5. O que preciso de você
+## 5. Decisões e andamento (9/out)
 
-1. ❓ Aprovar a Etapa 0 (PyTorch com CUDA).
-2. ❓ Topar gravar as demos da Etapa 1 (quantas, e quando dá).
-3. ❓ Os dois braços (A e depois B) ou só um.
-4. ❓ Usar ou não as 8 demos antigas junto com as novas.
-5. Pendente de antes: `git push` e a limpeza de ~3,9 GB.
+1. **Etapa 0 aprovada e feita no pc4**: `torch 2.11.0+cu128` no venv. O outro PC precisa do mesmo
+   comando ([GUIA_COMANDOS.md](GUIA_COMANDOS.md)).
+2. **Demos da Etapa 1**: o usuário grava, nas sessões que der.
+3. **Os dois braços, A primeiro.** O código do A está pronto (abaixo). O B (DQfD) se implementa
+   enquanto o A roda: a validação offline dele depende das demos novas.
+4. **Demos antigas fora**: movidas para `dados/_antigas_flag_errada/`, onde o BC e a âncora não as
+   pegam. Para reincluir na N1 depois, é só mover a pasta de volta para `dados/`.
+5. **Limpeza feita**: ~3,2 GB liberados (backups, checkpoints intermediários, `git gc`). O `.git`
+   segue com ~1,9 GB de checkpoints em branches antigos; apagar é decisão do usuário.
+
+**Ajustes do braço A já no código** (`src/agent/train.py`, teste offline
+`python -m src.utils.testar_callbacks_treino`):
+- **Alvo de entropia calibrado pelo BC**: numa run que parte de um BC, o termostato mede a H que o BC
+  entrega no próprio jogo durante o warmup do crítico (ator quase parado, `ent_coef` no piso) e
+  usa essa H como alvo inicial, no lugar da constante 1,1. O alvo nunca sobe acima dela. O valor
+  fica salvo no checkpoint e volta na retomada.
+- **Currículo por vitórias geridas**: só promove a N1 → N2 com ≥ 50% de vitórias **geridas** na
+  janela de 30 eps. A vitória por apagão não conta. O tensorboard ganha `noite_N/win_rate_gerida`.
+- **Âncora BC ligada** (já estava em `ANCORA_BC = True`): usa as demos de `dados/*/dataset.json`, que
+  agora são só as novas.
 
 ## 6. Riscos
 
