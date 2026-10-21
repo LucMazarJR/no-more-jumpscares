@@ -222,7 +222,9 @@ def test_phi_sem_ameaca_so_reserva_de_energia():
 def test_phi_energia_monotonica():
     # Mais bateria = situacao mais segura (base do preco imediato do gasto).
     assert _phi(energia=80.0) > _phi(energia=20.0)
-    assert abs((_phi(energia=100.0) - _phi(energia=0.0)) - PESO_ENERGIA) < 1e-9
+    # Tolerância de relógio: _phi ancora as idades em time.perf_counter(), e os microssegundos
+    # entre as duas chamadas entram nos termos de informação/Foxy (com 1e-9 falhava ~1 em 5).
+    assert abs((_phi(energia=100.0) - _phi(energia=0.0)) - PESO_ENERGIA) < 1e-4
 
 
 def test_shaping_gastar_energia_custa_no_step():
