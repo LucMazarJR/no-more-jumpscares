@@ -142,6 +142,10 @@ Percepção limpa em todos os blocos (~0,3 resync de câmera e ~0,1 falha de por
 **Configuração e robustez**
 - Tuning e algoritmo são **constantes de código**, não `.env` (o `.env` divergiu entre máquinas).
 - Se o jogo fechar, o env reabre e o treino continua.
+- **O jogo abaixa a prancheta sozinho quando o Foxy bate na porta** (relato do usuário, confirmado
+  na demo de N2 de 21/out: 7 s com o estado "câmera aberta" e a tela no escritório). Com o estado
+  preso em "aberta", porta e luz são recusadas. O env (a todo step com a câmera aberta) e o
+  gravador (a cada iteração) corrigem pelo "YOU" do mapa; antes o gravador não corrigia nunca.
 
 ## 5. Plano
 
@@ -174,6 +178,9 @@ Treino do zero com a percepção corrigida, etapas e critérios em
    precisa do mesmo comando ([GUIA_COMANDOS.md](GUIA_COMANDOS.md)).
 1. **Demos novas** (usuário): 3× N1, 6–8× N2, 2× N3, com a disciplina do diagnóstico (segurar a porta
    enquanto o Bonnie estiver lá, checar a luz esquerda a cada poucos segundos, pouca câmera).
+   Andamento (21/out, PC 1): 2× N1 (vitórias) e 1× N2 (vitória com 1,5%). Na N2, 3 das 4
+   reaberturas da porta esquerda ficaram gravadas com a flag acesa: o corredor estava vazio, mas o
+   detector só limpa a flag com 4 leituras de vazio (`DEBOUNCE_VAZIO`), e cada olhada rende 1–2.
 2. **BC novo** (`main.py bc`) e avaliação com `jogar --estocastico --trace`: N1 ≥ 40% e reaberturas
    com a flag acesa < 50%.
 3. **Braço A, RecurrentPPO**, a partir do BC novo. Código pronto (9/out): âncora BC ligada, alvo de
