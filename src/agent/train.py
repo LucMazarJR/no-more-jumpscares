@@ -166,7 +166,8 @@ ANCORA_BC_PASSOS = 1       # episódios de BC por rollout
 ANCORA_BC_LR     = 1e-4    # lr do Adam dedicado da âncora
 ANCORA_BC_STEPS  = 150_000 # steps até o peso chegar a 0 (contados de quando a âncora liga)
 
-# Currículo automático: promove a noite-alvo quando a janela CHEIA da noite alvo cruza o limiar.
+# Currículo automático: promove a noite-alvo quando a janela CHEIA da noite alvo cruza o limiar
+# de vitórias GERIDAS (6 AM com energia de pé; a vitória por apagão não conta).
 CURRICULO_LIMIAR = _env_float("FNAF_CURRICULO_LIMIAR", 0.50)
 
 # TRAVA do currículo. Ficou False na run 4 porque a promoção automática matou a run 2 (promoveu
@@ -200,18 +201,20 @@ def _ler_run() -> dict | None:
         return None
 
 
-def _criar_run(tag: str | None) -> dict:
+def _criar_run(tag: str | None, bc_path: str | None = None) -> dict:
     """Cria a identidade de uma run nova e grava em modelos/run.json.
 
     Nome: AAAA-MM-DD_runN_<algo>[_tag]. N = maior 'runN' já existente em logs/tensorboard + 1.
-    A data na frente faz o tensorboard listar as runs em ordem cronológica."""
+    A data na frente faz o tensorboard listar as runs em ordem cronológica. Guarda também o BC
+    de origem (a retomada precisa saber se a run partiu de um BC: calibração da entropia)."""
     numeros = [int(m.group(1)) for p in os.listdir(PASTA_TB)
                if (m := re.search(r"_run(\d+)_", p))] if os.path.isdir(PASTA_TB) else []
     numero = max(numeros, default=0) + 1
     nome = f"{datetime.now():%Y-%m-%d}_run{numero}_{'rppo' if USAR_LSTM else 'ppo'}"
     if tag:
         nome += "_" + re.sub(r"[^\w-]+", "_", tag.strip()).strip("_").lower()
-    run = {"nome": nome, "numero": numero, "criada_em": datetime.now().isoformat(timespec="seconds")}
+    run = {"nome": nome, "numero": numero, "criada_em": datetime.now().isoformat(timespec="seconds"),
+           "bc": bc_path}
     with open(CAMINHO_RUN, "w", encoding="utf-8") as f:
         json.dump(run, f, indent=2)
     return run
@@ -438,23 +441,59 @@ class ControladorEntropia(BaseCallback):
     Ajuste multiplicativo em log-espaço com passo clampado (±ENT_PASSO_MAX por rollout):
     com 1 update a cada ~48min precisa reagir em poucas horas, sem serrilhar (ganho < 1,
     subamortecido; medição já é a média de todas as épocas/minibatches do train). O PPO lê
-    model.ent_coef (float) a cada train(), então basta setá-lo entre rollouts."""
+    model.ent_coef (float) a cada train(), então basta setá-lo entre rollouts.
+
+    Calibração pelo BC (calibrar_pelo_bc=True, treino fresco com --bc): o alvo inicial passa a
+    ser a entropia que o BC ENTREGA, medida no próprio jogo durante o warmup do crítico (ator
+    quase parado, ent_coef no piso), em vez da constante H_INICIO. A constante só acerta se o BC
+    novo tiver a mesma entropia do de julho; errar para cima derrete o clone (run 2) e errar para
+    baixo o afia antes de o RL ter o que ensinar. O alvo nunca sobe acima do que o BC entrega
+    (h_fim = min(H_FIM, H_BC)). Fica salvo no modelo (model.h_alvo_calibrado, persistido no .zip
+    como o ent_coef), então a retomada reaplica o mesmo alvo."""
+    N_MEDIDAS_CALIBRACAO = 3   # média das últimas H do warmup: o ator ainda anda um pouco nele
+
     def __init__(self, h_inicio: float = H_INICIO, h_fim: float = H_FIM,
                  ent_inicial: float = ENT_INICIO, ent_min: float = ENT_MIN,
                  ent_max: float = ENT_MAX, ganho: float = ENT_GANHO,
-                 passo_max: float = ENT_PASSO_MAX):
+                 passo_max: float = ENT_PASSO_MAX, calibrar_pelo_bc: bool = False):
         super().__init__()
         self.h_inicio, self.h_fim = h_inicio, h_fim
         self.ent_inicial          = ent_inicial
         self.ent_min, self.ent_max = ent_min, ent_max
         self.ganho, self.passo_max = ganho, passo_max
+        self.calibrar_pelo_bc     = calibrar_pelo_bc
+        self._h_warmup: list[float] = []
 
     def _em_warmup(self) -> bool:
         # Janela de warmup do crítico (BC→PPO): ent_coef preso em ENT_MIN — o bônus de
         # entropia não passa pelo clip_range e randomizaria a política clonada.
         return WARMUP_FRAC > 0 and self.model._current_progress_remaining > 1.0 - WARMUP_FRAC
 
+    def _aplicar_calibracao(self, h_inicio: float, h_fim: float) -> None:
+        self.h_inicio, self.h_fim = float(h_inicio), float(h_fim)
+        self.calibrar_pelo_bc = False
+        self.model.h_alvo_calibrado = [self.h_inicio, self.h_fim]   # vai no .zip do checkpoint
+
+    def _calibrar(self) -> None:
+        """Fim do warmup: fixa o alvo na H que o BC entregou. Sem medidas (treino curto demais
+        para o warmup ter um train()), fica a constante, com aviso."""
+        if not self._h_warmup:
+            print(f"[entropia] AVISO: warmup sem medida de H — alvo fica na constante "
+                  f"{self.h_inicio:.2f}->{self.h_fim:.2f}")
+            self.calibrar_pelo_bc = False
+            return
+        ultimas = self._h_warmup[-self.N_MEDIDAS_CALIBRACAO:]
+        h_bc = sum(ultimas) / len(ultimas)
+        self._aplicar_calibracao(h_bc, min(self.h_fim, h_bc))
+        print(f"[entropia] alvo calibrado pelo BC: H medida no warmup {h_bc:.3f} "
+              f"(média de {len(ultimas)} rollouts) -> alvo {self.h_inicio:.3f}->{self.h_fim:.3f} "
+              f"(constante era {H_INICIO}->{H_FIM})")
+
     def _on_training_start(self) -> None:
+        salvo = getattr(self.model, "h_alvo_calibrado", None)
+        if salvo is not None:                    # RETOMADA de uma run já calibrada
+            self._aplicar_calibracao(*salvo)
+            print(f"[entropia] alvo calibrado (do checkpoint): {self.h_inicio:.3f}->{self.h_fim:.3f}")
         if self._em_warmup():
             self.model.ent_coef = self.ent_min
         elif self.model.num_timesteps == 0:      # modelo FRESCO: parte do valor inicial
@@ -468,11 +507,16 @@ class ControladorEntropia(BaseCallback):
 
     def _on_rollout_end(self) -> None:
         prog   = self.model._current_progress_remaining        # 1.0 → 0.0
-        h_alvo = self.h_fim + (self.h_inicio - self.h_fim) * prog
         entropy_loss = self.model.logger.name_to_value.get("train/entropy_loss")
         em_warmup = self._em_warmup()
-        if entropy_loss is not None:                           # ausente só antes do 1º train()
-            h = -float(entropy_loss)
+        h = -float(entropy_loss) if entropy_loss is not None else None   # None só antes do 1º train()
+        if self.calibrar_pelo_bc:
+            if em_warmup and h is not None:
+                self._h_warmup.append(h)
+            elif not em_warmup:
+                self._calibrar()
+        h_alvo = self.h_fim + (self.h_inicio - self.h_fim) * prog
+        if h is not None:
             self.logger.record("custom/entropia", h)           # H crua, direta (sem conta de cabeça)
             if not em_warmup:                                  # warmup: controlador em espera
                 erro  = self.ganho * (h_alvo - h)
@@ -507,6 +551,9 @@ class MetricasPorNoite(BaseCallback):
         super().__init__()
         self.janela, self.resumo_a_cada, self.dominio = janela, resumo_a_cada, dominio
         self.win  = defaultdict(lambda: deque(maxlen=janela))   # noite -> deque(0/1)
+        # Só vitória GERIDA (6 AM com energia de pé). A por apagão é sorte (o 6 AM chegou antes
+        # do Freddy) e não prova skill — é esta janela que o currículo usa para promover.
+        self.win_gerida = defaultdict(lambda: deque(maxlen=janela))   # noite -> deque(0/1)
         self.surv = defaultdict(lambda: deque(maxlen=janela))   # noite -> deque(tempo_jogo s)
         # Das mortes por animatrônico, em quantas ALGUMA flag de ameaça estava acesa no step
         # final? Separa "morreu CEGO" (flag apagada → falta disciplina de luz) de "morreu VENDO"
@@ -523,6 +570,7 @@ class MetricasPorNoite(BaseCallback):
                 return True
             noite = int(info.get("noite", 1))
             self.win[noite].append(1 if info.get("vitoria", False) else 0)   # 6AM real, não truncamento
+            self.win_gerida[noite].append(1 if info.get("causa") == "vitoria_gerida" else 0)
             self.surv[noite].append(float(info.get("tempo", 0.0)))
             self.win_geral.append(1 if info.get("vitoria", False) else 0)
             if info.get("causa"):
@@ -536,7 +584,7 @@ class MetricasPorNoite(BaseCallback):
         return True
 
     def _noite1_dominada(self) -> bool:
-        d = self.win[1]
+        d = self.win_gerida[1]
         return len(d) >= self.janela and (sum(d) / len(d)) >= self.dominio
 
     def _on_rollout_end(self) -> None:
@@ -544,6 +592,9 @@ class MetricasPorNoite(BaseCallback):
             if d:
                 self.logger.record(f"custom/noite_{noite}/win_rate", sum(d) / len(d))
                 self.logger.record(f"custom/noite_{noite}/n_eps", len(d))
+        for noite, d in self.win_gerida.items():
+            if d:
+                self.logger.record(f"custom/noite_{noite}/win_rate_gerida", sum(d) / len(d))
         for noite, d in self.surv.items():
             if d:
                 self.logger.record(f"custom/noite_{noite}/sobrevivencia_s", sum(d) / len(d))
@@ -565,23 +616,24 @@ class MetricasPorNoite(BaseCallback):
     def _imprimir_resumo(self) -> None:
         partes = []
         for noite in sorted(self.win):
-            d, s = self.win[noite], self.surv[noite]
+            d, g, s = self.win[noite], self.win_gerida[noite], self.surv[noite]
             wr = (sum(d) / len(d) * 100) if d else 0.0
+            wg = (sum(g) / len(g) * 100) if g else 0.0
             sv = (sum(s) / len(s)) if s else 0.0
-            partes.append(f"N{noite}: {wr:3.0f}% vit | {sv:4.0f}s | {len(d):2d}ep")
+            partes.append(f"N{noite}: {wr:3.0f}% vit ({wg:3.0f}% gerida) | {sv:4.0f}s | {len(d):2d}ep")
         print(f"[POR NOITE | janela {self.janela}]  " + "   ".join(partes))
         if self._noite1_dominada():
-            print(f"   -> Noite 1 DOMINADA (>= {self.dominio*100:.0f}%). Considere "
-                  f"FNAF_RESET_METODO=continue p/ forcar a Noite 2 (a metrica vai PIORAR de inicio — normal).")
+            print(f"   -> Noite 1 DOMINADA (>= {self.dominio*100:.0f}% de vitórias geridas).")
         else:
-            wr1 = (sum(self.win[1]) / len(self.win[1]) * 100) if self.win[1] else 0.0
-            print(f"   -> Noite 1 ainda nao dominada ({wr1:.0f}% < {self.dominio*100:.0f}%) — siga em new_game.")
+            g1 = self.win_gerida[1]
+            wg1 = (sum(g1) / len(g1) * 100) if g1 else 0.0
+            print(f"   -> Noite 1 ainda nao dominada ({wg1:.0f}% geridas < {self.dominio*100:.0f}%).")
 
 
 class CurriculumCallback(BaseCallback):
     """Currículo AUTOMÁTICO: promove a noite-alvo do env (noite_desejada, lida por
-    decidir_reset no modo continue) quando a janela CHEIA da noite alvo em MetricasPorNoite
-    cruza o limiar. Substitui a rotina manual de editar FNAF_NOITE_DESEJADA e reiniciar.
+    decidir_reset no modo continue) quando a janela CHEIA de vitórias GERIDAS da noite alvo em
+    MetricasPorNoite cruza o limiar. Substitui a rotina manual de editar FNAF_NOITE_DESEJADA.
 
       • Janela cheia (>= janela_min eps da noite ALVO) — não mistura noites, ao contrário
         do antigo gate de entropia, e não promove por meia dúzia de episódios sortudos.
@@ -639,11 +691,15 @@ class CurriculumCallback(BaseCallback):
         if not CURRICULO_ATIVO:      # trava (run 4): só mede, não promove — ver CURRICULO_ATIVO
             return True
         if self.locals.get("dones", [False])[0]:
-            d = self.metricas.win[self.alvo]      # janela SÓ da noite alvo
+            # Janela SÓ da noite alvo e SÓ de vitórias geridas (a por apagão é sorte). Na run 4,
+            # aos 194k (a promoção veio aos 218,7k), a N1 marcava 100% de vitórias, mas só metade
+            # dos desfechos eram vitórias geridas.
+            d = self.metricas.win_gerida[self.alvo]
             if (self.alvo < self.noite_max and len(d) >= self.janela_min
                     and sum(d) / len(d) >= self.limiar):
                 print(f"[curriculo] Noite {self.alvo} dominada "
-                      f"({sum(d) / len(d) * 100:.0f}% na janela de {len(d)}) -> alvo Noite {self.alvo + 1}")
+                      f"({sum(d) / len(d) * 100:.0f}% de vitórias geridas na janela de {len(d)}) "
+                      f"-> alvo Noite {self.alvo + 1}")
                 self._aplicar(self.alvo + 1)
         return True
 
@@ -784,7 +840,7 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
         if tag_run:
             print(f"[run] --nome ignorado na retomada: a run continua '{run['nome']}'")
     else:
-        run = _criar_run(tag_run)
+        run = _criar_run(tag_run, bc_path if bc_path and os.path.exists(bc_path) else None)
     origem = f"RETOMADA de {carregar_modelo}" if carregar_modelo else (
         f"NOVO (BC: {bc_path})" if bc_path else "NOVO")
     identificacao = (f"run: {run['nome']} | {origem} | commit {_versao_codigo()} | "
@@ -864,7 +920,9 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
           f"target_kl={TARGET_KL} clip_reward={CLIP_REWARD} peso_energia={PESO_ENERGIA} "
           f"peso_info={PESO_INFO} | "
           f"ent_coef inicial {ENT_INICIO} | "
-          f"controlador: H {H_INICIO}->{H_FIM} nats, ent [{ENT_MIN}, {ENT_MAX}], ganho {ENT_GANHO}"
+          f"controlador: H {H_INICIO}->{H_FIM} nats"
+          + (" (alvo recalibrado pela H do BC no fim do warmup)" if run.get("bc") else "")
+          + f", ent [{ENT_MIN}, {ENT_MAX}], ganho {ENT_GANHO}"
           + (f" | warmup do crítico: {WARMUP_FRAC*100:.0f}% do treino (clip {WARMUP_CLIP})"
              if WARMUP_FRAC > 0 else "")
           + (f" | âncora BC: peso {ANCORA_BC_PESO}→0, {ANCORA_BC_PASSOS} ep/rollout, lr {ANCORA_BC_LR}"
@@ -888,7 +946,9 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
         save_vecnormalize=True,   # salva o vecnormalize JUNTO de cada checkpoint (par casado p/ retomar)
         log_callback=log_callback,
     )
-    entropia = ControladorEntropia()     # termostato: ent_coef em malha fechada sobre a H medida
+    # Termostato: ent_coef em malha fechada sobre a H medida. Run que partiu de um BC calibra o
+    # alvo pela H que o BC entrega no warmup (o checkpoint já calibrado reaplica o valor salvo).
+    entropia = ControladorEntropia(calibrar_pelo_bc=bool(run.get("bc")))
     metricas_noite = MetricasPorNoite()  # quebra win_rate/sobrevivência/causas por noite
     curriculum = CurriculumCallback(metricas_noite)  # DEPOIS de metricas_noite: lê as janelas dele
     callbacks = [log_callback, checkpoint, entropia, metricas_noite, curriculum]
