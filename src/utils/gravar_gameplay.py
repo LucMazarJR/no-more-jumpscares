@@ -21,6 +21,8 @@ uma cópia paralela da mecânica para dessincronizar. Também espelhado do step(
   • ameaças rotuladas por `_atualizar_ameaca` (mesmos templates/debounce do treino);
   • câmera ressincronizada pelo "YOU" do mapa (`_sincronizar_camera`): o Foxy batendo na
     porta abaixa a prancheta sem nenhuma tecla;
+  • bipe quando a flag de ameaça de um lado apaga, para o humano reabrir a porta só quando
+    o agente também saberia que o corredor está vazio;
   • rotulagem SEM shift: registro = (frame_t, ação decidida VENDO frame_t).
 
 THREADING: handlers do `keyboard` rodam na thread de hook e o mss/pyautogui não são
@@ -31,7 +33,9 @@ import cv2
 import json
 import os
 import sys
+import threading
 import time
+import winsound
 from collections import deque
 from datetime import datetime
 
@@ -69,6 +73,19 @@ TECLAS = {
 # no treino do BC (WeightedRandomSampler). Iterações com ação de troca de lado estouram o
 # período (delays da coreografia) — inofensivo: energia/tempo correm em wall-clock.
 _LOOP_DT = 0.25
+
+# Bipe quando a flag de ameaça de um lado APAGA: é o momento em que o agente passaria a "saber"
+# que o corredor está vazio. O humano vê o corredor vazio numa olhada curta, mas o detector precisa
+# de DEBOUNCE_VAZIO leituras (~1 válida por segundo de luz: ~4 s). Reabrir antes do bipe grava
+# "reabriu com a ameaça marcada", o erro nº 1 do agente (demo de N2 de 21/out: 3 de 4 reaberturas).
+BIPE_ESQ = 1500   # Hz, agudo: Bonnie (porta esquerda)
+BIPE_DIR = 800    # Hz, grave: Chica (porta direita)
+_BIPE_MS = 150
+
+
+def _bipe(freq: int) -> None:
+    """Toca sem travar o loop (winsound.Beep bloqueia pela duração)."""
+    threading.Thread(target=winsound.Beep, args=(freq, _BIPE_MS), daemon=True).start()
 
 
 def acao_para_numero(nome_acao: str) -> int:
@@ -110,6 +127,8 @@ def gravar():
         print(f"  [{tecla}] → {acao}")
     print("\nAs ações têm os MESMOS delays do treino (virada de lado ~0.85s, saída de")
     print("câmera ~0.65s, cooldowns) — o clique acontece quando o jogo aceita, não na tecla.")
+    print("\nBIPE = o detector confirmou o corredor vazio (agudo: esquerda/Bonnie, grave:")
+    print("direita/Chica). Só reabra a porta DEPOIS do bipe, mesmo já vendo o corredor vazio.")
     print("\nNavegue no jogo até a noite carregar e aperte [F9] para COMEÇAR a gravar.")
     print("[F10] → PARA a gravação (se o jogo fechar sozinho — Golden Freddy — aperte F10;")
     print("        a sessão parcial continua válida para o BC).\n")
@@ -199,8 +218,16 @@ def gravar():
                 print(f"  [sync] câmera {'aberta' if env.camera_aberta else 'fechada'} pelo jogo"
                       f" — estado corrigido")
 
-            # (e) Ameaças pela implementação do treino (estado HELD dentro do env).
+            # (e) Ameaças pela implementação do treino (estado HELD dentro do env), com bipe
+            # quando uma flag apaga (ver BIPE_ESQ).
+            ameaca_antes = (env.ameaca_esq, env.ameaca_dir)
             env._atualizar_ameaca(frame_ref)
+            if ameaca_antes[0] and not env.ameaca_esq:
+                _bipe(BIPE_ESQ)
+                print("  [flag] esquerda apagou — corredor confirmado vazio")
+            if ameaca_antes[1] and not env.ameaca_dir:
+                _bipe(BIPE_DIR)
+                print("  [flag] direita apagou — corredor confirmado vazio")
 
             # (f) Solta a luz depois da captura (igual ao step).
             if luz_segurada is not None:

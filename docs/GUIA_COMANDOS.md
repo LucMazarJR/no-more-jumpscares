@@ -123,9 +123,12 @@ Teclas: `A`/`D` portas, `Q`/`E` luzes, `Tab` abre/fecha a câmera, `1`–`0` e `
 **Como jogar as demos** (o BC copia o que você faz, então o que importa é o hábito):
 - **Segure a porta esquerda fechada enquanto o Bonnie estiver lá.** Só reabra depois de acender a
   luz e ver o corredor vazio. É o erro nº 1 do agente atual.
-- **Antes de reabrir, deixe a luz acesa 1–2 s.** O detector só dá "vazio" depois de algumas
-  leituras seguidas com a luz acesa. Com uma piscada, a flag continua acesa, e a demo grava
-  "abriu com o Bonnie marcado", justamente o erro que queremos tirar do agente.
+- **Só reabra a porta depois do bipe.** O gravador bipa quando o detector confirma o corredor
+  vazio (agudo: esquerda/Bonnie; grave: direita/Chica). Ele precisa de 4 leituras de vazio e
+  rende ~1 por segundo de luz (a luz pisca porque o botão só é apertado na hora da captura, igual
+  ao agente; o frame que sai escuro é descartado), então são ~4 s de luz. Você vê o corredor vazio
+  antes disso, mas reabrir sem o bipe grava "abriu com o Bonnie marcado", justamente o erro que
+  queremos tirar do agente.
 - **Cheque a luz esquerda a cada poucos segundos**, não só quando "der vontade": as mortes que
   sobram vêm ~20 s depois da última olhada.
 - **Cheque a luz direita também, a cada ~20–30 s, mesmo vendo a Chica na câmera.** Jogue com a
