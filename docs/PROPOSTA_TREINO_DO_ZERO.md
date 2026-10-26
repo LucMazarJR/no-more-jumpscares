@@ -87,6 +87,8 @@ entropia < 0,4 com o `ent_coef` no teto; ou mortes por energia > 50% na N1.
    enquanto o A roda: a validação offline dele depende das demos novas.
 4. **Demos antigas fora**: movidas para `dados/_antigas_flag_errada/`, onde o BC e a âncora não as
    pegam. Para reincluir na N1 depois, é só mover a pasta de volta para `dados/`.
+   **Revisto em 25/out:** com só ~33 min de demos novas, as 5 N1 antigas voltaram (a flag antiga
+   quase não acendia na N1). As N2/N3 antigas seguem fora. Detalhes no ESTADO_ATUAL §5.
 5. **Limpeza feita**: ~3,2 GB liberados (backups, checkpoints intermediários, `git gc`). O `.git`
    segue com ~1,9 GB de checkpoints em branches antigos; apagar é decisão do usuário.
 

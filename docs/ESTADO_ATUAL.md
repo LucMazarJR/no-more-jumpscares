@@ -181,8 +181,18 @@ Treino do zero com a percepção corrigida, etapas e critérios em
    Andamento (21/out, PC 1): 2× N1 (vitórias) e 1× N2 (vitória com 1,5%). Na N2, 3 das 4
    reaberturas da porta esquerda ficaram gravadas com a flag acesa: o corredor estava vazio, mas o
    detector só limpa a flag com 4 leituras de vazio (`DEBOUNCE_VAZIO`), e cada olhada rende 1–2.
+   Em 23/out, 1× N3 parcial (393 s). **25/out: o usuário encerrou as gravações**, com ~33 min de
+   demos novas (2 N1, 1 N2, 1 N3 parcial), contra as 11–13 noites planejadas.
 2. **BC novo** (`main.py bc`) e avaliação com `jogar --estocastico --trace`: N1 ≥ 40% e reaberturas
    com a flag acesa < 50%.
+   25/out, no pc4 (GPU), decisões do usuário para compensar o pouco dado:
+   - 9 demos: as 4 novas + as 5 N1 antigas (~45 min), de volta a `dados/`. Na N1 a flag antiga
+     quase não acendia (0–5% do tempo), então a contaminação é pequena. As N2/N3 antigas seguem em
+     `dados/_antigas_flag_errada/`.
+   - Reabrir a porta com a flag acesa vira "nada" na carga (`_neutralizar_reabertura_com_flag`):
+     6 registros de 13.796 (3 da N2 nova, pelo atraso do detector; 3 das N1 antigas).
+   - Avaliação de 20 eps de N1 (`rodar_fase1.py --blocos BC --trace`) encadeada com o treino A: se
+     o BC reprovar, o treino é parado ainda no warmup (ator quase parado), sem perda.
 3. **Braço A, RecurrentPPO**, a partir do BC novo. Código pronto (9/out): âncora BC ligada, alvo de
    entropia calibrado pela H que o BC entrega no warmup, currículo promovendo só por vitórias
    **geridas**.
