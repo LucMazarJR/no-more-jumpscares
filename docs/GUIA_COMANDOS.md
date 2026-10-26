@@ -146,8 +146,19 @@ python main.py bc
 
 Treina o BC com todos os `dados/*/dataset.json` e gera `modelos/fnaf_bc.zip`. **Atenção:** isso
 substitui o BC atual. O BC da Fase 1 já está guardado em
-`modelos/pc_luciano_run4/fnaf_bc_flag_errada.zip`; as demos antigas estão em
+`modelos/pc_luciano_run4/fnaf_bc_flag_errada.zip`; as demos N2/N3 antigas estão em
 `dados/_antigas_flag_errada/`, fora do treino.
+
+No fim, o treino **calibra o ritmo** do clone: salva o modelo bruto em `modelos/fnaf_bc_bruto.zip`
+e o calibrado em `modelos/fnaf_bc.zip`, com o ajuste em `modelos/fnaf_bc_calibracao.json`. Sem
+isso, a perda ponderada faz o clone apertar porta e luz muito mais que o humano no jogo. O
+terminal mostra o ritmo (ações/min) do humano, do clone bruto e do calibrado. Para um BC treinado
+antes da calibração, ou para só medir um modelo:
+
+```
+python -m src.utils.calibrar_ritmo_bc
+python -m src.utils.calibrar_ritmo_bc --medir modelos/fnaf_bc.zip
+```
 
 ## 6. Treinar
 

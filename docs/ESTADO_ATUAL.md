@@ -209,6 +209,20 @@ Treino do zero com a percepção corrigida, etapas e critérios em
    - O treino A (run `2026-10-26_run5_rppo_bc_novo`) caiu no 1º rollout: `cudnn RNN backward can
      only be called in training mode` na âncora BC (1º treino na GPU). Corrigido; não retomar
      com este BC.
+   - Pergunta ao usuário sobre a anomalia: todos os blocos rodaram nas mesmas condições; a única
+     diferença conhecida é que a transmissão (Twitch/OBS) foi ligada nos primeiros segundos do
+     bloco 1. Hipótese em aberto: o OBS se acopla ao jogo, e o script fecha e reabre o jogo a cada
+     bloco; a queda de 62% para 45% nas capturas com o corredor iluminado tem cara de atraso de
+     renderização. Testar com um bloco sem transmissão.
+
+   **Correção (26/out): calibração do ritmo** (`calibrar_ritmo`, `python -m src.utils.calibrar_ritmo_bc`).
+   A perda ponderada põe o ótimo do clone em p_humano·w (as raras inflacionadas), e o step do jogo
+   (~0,9 s) é ~3× o registro das demos. Um delta por classe no viés da cabeça de ação faz o ritmo
+   previsto no jogo (teacher-forced nas demos) bater com o humano por minuto. A âncora do RL desconta
+   o delta. Validado no BC de agosto: o proxy previu 31,7 ações/min contra 41,2 medidas na Fase 1
+   (subestima ~30%); calibrado, porta 1,6 → 0,5/min (humano 0,4), luz 9,7 (9,7), top-1 igual, macro
+   35,6 → 33,0%, H 0,58 → 0,64. Próximo: aplicar no BC novo (pc4), conferir o proxy contra o ritmo
+   medido no jogo (porta 1,6–5,7/min) e avaliar 2 blocos curtos, um sem a transmissão.
 3. **Braço A, RecurrentPPO**, a partir do BC novo. Código pronto (9/out): âncora BC ligada, alvo de
    entropia calibrado pela H que o BC entrega no warmup, currículo promovendo só por vitórias
    **geridas**.

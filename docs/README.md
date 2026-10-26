@@ -67,6 +67,7 @@ Os comandos completos estão no [README](../README.md) e no [VALIDACAO_E_TESTES.
 - `testar_masking` / `sonda_memoria` — LSTM (reset de memória / uso de recorrência) — p/ o A/B futuro
 - `testar_callbacks_treino` — termostato de entropia (calibração pelo BC) e currículo por vitórias geridas
 - `testar_sync_camera` — ressincronia da câmera pelo "YOU" do mapa (o Foxy batendo na porta abaixa a prancheta)
+- `calibrar_ritmo_bc` — calibra (ou só mede, com `--medir`) o ritmo de ações por minuto do BC contra o das demos
 - `simular_energia` — modelo de dreno de energia vs o jogo real
 - `ablacao_offline` — a CNN contribui? (exige modelo treinado)
 - `scripts/smoke_test.py` — env + extractor + predict sem o jogo
