@@ -720,9 +720,14 @@ class AncoraBC(BaseCallback):
 
     def __init__(self, caminhos_demos: list[str], peso_inicial: float = ANCORA_BC_PESO,
                  passos: int = ANCORA_BC_PASSOS, lr: float = ANCORA_BC_LR,
-                 duracao: int = ANCORA_BC_STEPS):
+                 duracao: int = ANCORA_BC_STEPS, delta_calibracao=None):
         super().__init__()
         self.caminhos = caminhos_demos
+        # Delta da calibração de ritmo do BC (carregar_delta_calibracao). A perda ponderada da
+        # âncora tem ótimo nas probabilidades INFLADAS do BC bruto; aplicada nos logits do RL (já
+        # com o delta) ela desfaria a calibração aos poucos. Descontar o delta antes da perda
+        # mantém o mesmo ótimo do BC bruto, deslocado pelo delta, e a calibração fica de pé.
+        self.delta = delta_calibracao
         self.peso_inicial = peso_inicial
         self.passos = passos
         self.lr = lr
@@ -745,6 +750,9 @@ class AncoraBC(BaseCallback):
             return
         self.episodios = _carregar_episodios(self.caminhos)
         self.pesos_classe = _pesos_classe(self.episodios).to(self.model.device)
+        if self.delta is not None:
+            self.delta = self.delta.to(self.model.device)
+            print("[ancora_bc] BC com ritmo calibrado: a perda desconta o delta da calibração.")
         self.optimizer = optim.Adam(self.model.policy.parameters(), lr=self.lr)
         self.ativa = True
         self._step_inicial = int(self.model.num_timesteps)
@@ -759,6 +767,7 @@ class AncoraBC(BaseCallback):
         if not self.ativa:
             return
         import random as _random
+        import torch
         from src.agent.behavioral_cloning import _chunks_episodio, _estado_lstm_zero
         # Peso decai linear sobre a PRÓPRIA duração da âncora, contada a partir do step em que
         # ela ligou — NÃO sobre o _current_progress_remaining do SB3. Em RETOMADA aquele
@@ -785,7 +794,11 @@ class AncoraBC(BaseCallback):
                 for obs, starts, acoes in _chunks_episodio(ep, 256, device):
                     dist, h = policy.get_distribution(obs, h, starts)
                     w = self.pesos_classe[acoes]
-                    perda = peso * (-(w * dist.log_prob(acoes)).sum() / w.sum().clamp_min(1e-8))
+                    logits = dist.distribution.logits
+                    if self.delta is not None:
+                        logits = logits - self.delta
+                    logp = torch.log_softmax(logits, dim=-1).gather(1, acoes.unsqueeze(1)).squeeze(1)
+                    perda = peso * (-(w * logp).sum() / w.sum().clamp_min(1e-8))
                     self.optimizer.zero_grad()
                     perda.backward()
                     self.optimizer.step()
@@ -963,7 +976,9 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
     callbacks = [log_callback, checkpoint, entropia, metricas_noite, curriculum]
     if ANCORA_BC:
         import glob as _glob
-        callbacks.append(AncoraBC(sorted(_glob.glob("dados/*/dataset.json"))))
+        from src.agent.behavioral_cloning import carregar_delta_calibracao
+        callbacks.append(AncoraBC(sorted(_glob.glob("dados/*/dataset.json")),
+                                  delta_calibracao=carregar_delta_calibracao(run.get("bc"))))
 
     print(f"Treinando por {timesteps:,} timesteps...\n")
     try:

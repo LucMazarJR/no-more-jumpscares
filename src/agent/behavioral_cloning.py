@@ -348,6 +348,7 @@ def _carregar_episodios(caminhos_json: list[str]) -> list[dict]:
             "acoes":   torch.from_numpy(np.array([int(d["acao"]) for d in dados], dtype=np.int64)),
             "noite":   int(dados[0].get("noite", 1)),
             "nome":    Path(caminho).parent.name,
+            "minutos": float(dados[-1].get("tempo_ep", 0.0)) / 60.0,
         })
         print(f"Carregado: {caminho} ({len(dados)} frames, noite {episodios[-1]['noite']})")
     return episodios
@@ -440,6 +441,110 @@ def _score_clone(top1: float, macro: float) -> float:
     if top1 <= 0.0 or macro <= 0.0:
         return 0.0
     return 2.0 * top1 * macro / (top1 + macro)
+
+
+# ── Ritmo do clone no jogo: calibração do viés da cabeça de ação ─────────────────────────────
+# A perda PONDERADA (1/freq^expoente) põe o ótimo do clone em p_humano(c|x)·w_c: com a ação
+# SORTEADA (RL e `jogar --estocastico`), as classes raras saem inflacionadas. E as demos têm ~3
+# registros/s contra ~1,1 step/s do agente. O BC de 25/out mostrou o efeito: porta ~5/min no jogo
+# contra 0,2/min nas N1 humanas, e a energia acabou em 11 de 18 mortes. A calibração soma um delta
+# por classe ao viés da cabeça de ação para o ritmo PREVISTO no jogo casar com o humano por minuto.
+# A perda ponderada continua no treino (é ela que faz o clone enxergar as raras); o delta só
+# corrige a taxa com que cada ação é sorteada.
+S_POR_STEP_JOGO = 0.9                                 # medido: ~0,8–0,95 s por step no `jogar`
+CAMINHO_BC_BRUTO = "modelos/fnaf_bc_bruto.zip"        # saída do treino, antes da calibração
+CAMINHO_CALIBRACAO = "modelos/fnaf_bc_calibracao.json"
+
+
+@torch.no_grad()
+def ritmos_por_minuto(policy, episodios: list[dict], device, delta=None,
+                      s_por_step: float = S_POR_STEP_JOGO, chunk: int = 256):
+    """(previsto, humano): ações por minuto de cada classe, tensores (NUM_ACOES,).
+
+    Previsto = média por registro das probabilidades do clone nos estados das demos (teacher-forced,
+    estado oculto propagado como no jogo) vezes os steps por minuto do agente. É um proxy: no jogo
+    o clone visita os próprios estados, não os do humano. Humano = rótulos por minuto de jogo."""
+    soma, registros = torch.zeros(NUM_ACOES), 0
+    humano, minutos = torch.zeros(NUM_ACOES), 0.0
+    d = None if delta is None else torch.as_tensor(delta, dtype=torch.float32, device=device)
+    for ep in episodios:
+        h = _estado_lstm_zero(policy, device)
+        for obs, starts, acoes in _chunks_episodio(ep, chunk, device):
+            dist, h = policy.get_distribution(obs, h, starts)
+            logits = dist.distribution.logits if d is None else dist.distribution.logits + d
+            soma += torch.softmax(logits, dim=-1).sum(dim=0).cpu()
+            registros += acoes.shape[0]
+        humano += torch.bincount(ep["acoes"], minlength=NUM_ACOES).float()
+        minutos += ep["minutos"]
+    return soma / max(registros, 1) * (60.0 / s_por_step), humano / max(minutos, 1e-9)
+
+
+def calcular_delta(policy, episodios: list[dict], device, s_por_step: float = S_POR_STEP_JOGO,
+                   iteracoes: int = 5, limites: tuple[float, float] = (-6.0, 4.0)) -> torch.Tensor:
+    """Delta por classe ('nada' fica em 0) que faz o ritmo previsto casar com o humano. Iterativo:
+    mexer numa classe muda a normalização das outras. O +0,01/min evita delta infinito numa
+    classe que o humano nunca usou (ela fica no limite inferior: quase nunca sorteada)."""
+    delta = torch.zeros(NUM_ACOES)
+    for _ in range(iteracoes):
+        previsto, humano = ritmos_por_minuto(policy, episodios, device, delta, s_por_step)
+        ajuste = torch.log((humano + 0.01) / (previsto + 0.01))
+        ajuste[0] = 0.0
+        delta = (delta + ajuste).clamp(*limites)
+    return delta
+
+
+def _imprimir_ritmos(rotulo: str, ritmo: torch.Tensor) -> dict:
+    grupos = {"porta": (1, 2), "luz": (3, 4), "tab": (5,), "trocar câmera": tuple(range(6, 17))}
+    por_grupo = {g: float(ritmo[list(ids)].sum()) for g, ids in grupos.items()}
+    por_grupo["total"] = float(ritmo[1:].sum())
+    print(f"  {rotulo:<22}" + "  ".join(f"{g} {v:5.1f}" for g, v in por_grupo.items()) + "  (ações/min)")
+    return por_grupo
+
+
+def _sha256(caminho: str) -> str:
+    import hashlib
+    with open(caminho, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest().upper()
+
+
+def calibrar_ritmo(modelo, episodios: list[dict], caminho_saida: str = "modelos/fnaf_bc.zip") -> torch.Tensor:
+    """Aplica o delta ao viés da cabeça de ação do `modelo` (pesos BRUTOS do BC), salva em
+    `caminho_saida` e grava CAMINHO_CALIBRACAO (delta + hash do zip calibrado: a âncora do RL lê
+    o delta para não desfazer a correção). Devolve o delta."""
+    policy, device = modelo.policy, modelo.device
+    estava_treinando = policy.training
+    policy.set_training_mode(False)
+    print(f"\n=== Calibração do ritmo (step de {S_POR_STEP_JOGO} s no jogo) ===")
+    previsto, humano = ritmos_por_minuto(policy, episodios, device)
+    r_humano = _imprimir_ritmos("humano (demos)", humano)
+    r_antes = _imprimir_ritmos("clone bruto", previsto)
+    delta = calcular_delta(policy, episodios, device)
+    policy.action_net.bias.data += delta.to(policy.action_net.bias.device)
+    previsto_depois, _ = ritmos_por_minuto(policy, episodios, device)
+    r_depois = _imprimir_ritmos("clone calibrado", previsto_depois)
+    policy.set_training_mode(estava_treinando)
+    modelo.save(caminho_saida)
+    with open(CAMINHO_CALIBRACAO, "w", encoding="utf-8") as f:
+        json.dump({"delta": [round(float(x), 4) for x in delta], "s_por_step": S_POR_STEP_JOGO,
+                   "sha256_calibrado": _sha256(caminho_saida), "demos": [ep["nome"] for ep in episodios],
+                   "ritmo_humano": r_humano, "ritmo_bruto": r_antes, "ritmo_calibrado": r_depois},
+                  f, ensure_ascii=False, indent=2)
+    print(f"Modelo BC calibrado salvo em: {caminho_saida} (delta em {CAMINHO_CALIBRACAO})")
+    return delta
+
+
+def carregar_delta_calibracao(caminho_bc: str | None) -> torch.Tensor | None:
+    """Delta da calibração do BC em `caminho_bc`, ou None se o BC não foi calibrado (ou foi
+    trocado depois: o hash não bate). Usado pela âncora BC do RL."""
+    import os
+    if not caminho_bc or not os.path.exists(caminho_bc) or not os.path.exists(CAMINHO_CALIBRACAO):
+        return None
+    with open(CAMINHO_CALIBRACAO, encoding="utf-8") as f:
+        cal = json.load(f)
+    if cal.get("sha256_calibrado") != _sha256(caminho_bc):
+        print(f"[calibração] {CAMINHO_CALIBRACAO} não é deste BC ({caminho_bc}): ignorada.")
+        return None
+    return torch.tensor(cal["delta"], dtype=torch.float32)
 
 
 def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float = 1e-3,
@@ -586,9 +691,9 @@ def treinar_bc_recorrente(caminhos_json: list[str], epochs: int = 200, lr: float
     else:
         print("[OK] Clone dentro do aceite (score >= 35, macro >= 25%, H <= 1.3).")
 
-    caminho_saida = "modelos/fnaf_bc.zip"
-    melhor_modelo.save(caminho_saida)
-    print(f"Modelo BC (recorrente) salvo em: {caminho_saida}")
+    melhor_modelo.save(CAMINHO_BC_BRUTO)
+    print(f"Modelo BC (recorrente) bruto salvo em: {CAMINHO_BC_BRUTO}")
+    calibrar_ritmo(melhor_modelo, episodios, "modelos/fnaf_bc.zip")
     env.close()
     return melhor_modelo
 
