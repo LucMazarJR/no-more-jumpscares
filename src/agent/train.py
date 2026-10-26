@@ -772,19 +772,28 @@ class AncoraBC(BaseCallback):
             return
         policy, device = self.model.policy, self.model.device
         perda_total, n = 0.0, 0
-        for _ in range(self.passos):
-            ep = _random.choice(self.episodios)
-            h = _estado_lstm_zero(policy, device)
-            for obs, starts, acoes in _chunks_episodio(ep, 256, device):
-                dist, h = policy.get_distribution(obs, h, starts)
-                w = self.pesos_classe[acoes]
-                perda = peso * (-(w * dist.log_prob(acoes)).sum() / w.sum().clamp_min(1e-8))
-                self.optimizer.zero_grad()
-                perda.backward()
-                self.optimizer.step()
-                h = (h[0].detach(), h[1].detach())   # BPTT truncado
-                perda_total += perda.item()
-                n += 1
+        # O SB3 coleta o rollout com a policy em modo eval, e o backward da LSTM no cuDNN (GPU)
+        # exige modo treino ("cudnn RNN backward can only be called in training mode"; na CPU
+        # passava — derrubou a run 5 no 1º rollout, 26/out). Sem dropout/batchnorm na policy, o
+        # modo não muda as saídas.
+        estava_treinando = policy.training
+        policy.set_training_mode(True)
+        try:
+            for _ in range(self.passos):
+                ep = _random.choice(self.episodios)
+                h = _estado_lstm_zero(policy, device)
+                for obs, starts, acoes in _chunks_episodio(ep, 256, device):
+                    dist, h = policy.get_distribution(obs, h, starts)
+                    w = self.pesos_classe[acoes]
+                    perda = peso * (-(w * dist.log_prob(acoes)).sum() / w.sum().clamp_min(1e-8))
+                    self.optimizer.zero_grad()
+                    perda.backward()
+                    self.optimizer.step()
+                    h = (h[0].detach(), h[1].detach())   # BPTT truncado
+                    perda_total += perda.item()
+                    n += 1
+        finally:
+            policy.set_training_mode(estava_treinando)
         self.logger.record("custom/ancora_bc/loss", perda_total / max(n, 1))
 
 

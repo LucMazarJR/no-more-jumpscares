@@ -193,6 +193,22 @@ Treino do zero com a percepção corrigida, etapas e critérios em
      6 registros de 13.796 (3 da N2 nova, pelo atraso do detector; 3 das N1 antigas).
    - Avaliação de 20 eps de N1 (`rodar_fase1.py --blocos BC --trace`) encadeada com o treino A: se
      o BC reprovar, o treino é parado ainda no warmup (ator quase parado), sem perda.
+
+   **Resultado (25–26/out, pc4, commit `1196cda`): REPROVADO.** N1 2/20 (10%; critério ≥ 40%).
+   Reaberturas com a flag acesa: 7/187 (4%, passa). Mortes na N1: 11 por energia, 7 por
+   animatrônico. Clone offline: top-1 64,4%, macro 43,5%, **H 1,30** (no teto do aceite; o BC de
+   agosto entregava 0,83 no jogo).
+   - **Age demais:** 5,4 ações de porta/min nos blocos 2–4 (as N1 humanas: 0,2), luz 15/min
+     (humanas: 7). Hipótese: 22 ações de porta em 13.796 frames + peso de classe para as raras +
+     H alta na avaliação estocástica = portas disparadas fora de hora, energia acabando.
+   - **Anomalia não explicada:** o bloco 1 (22h41–23h29) e os blocos 2–4 diferem de forma
+     sistemática (porta/min 0,6–2,0 nos 5 eps do bloco 1 × 4,0–7,5 nos 15 seguintes; luz esquerda
+     lida acesa 62% × 45%; vitórias 2/5 × 0/15). O script reabre o jogo igual em todo bloco, e a
+     Fase 1 não mostrava efeito de "primeiro bloco". Falta saber o que mudou na máquina por volta
+     das 23h30 (perguntado ao usuário).
+   - O treino A (run `2026-10-26_run5_rppo_bc_novo`) caiu no 1º rollout: `cudnn RNN backward can
+     only be called in training mode` na âncora BC (1º treino na GPU). Corrigido; não retomar
+     com este BC.
 3. **Braço A, RecurrentPPO**, a partir do BC novo. Código pronto (9/out): âncora BC ligada, alvo de
    entropia calibrado pela H que o BC entrega no warmup, currículo promovendo só por vitórias
    **geridas**.
