@@ -863,6 +863,11 @@ def treinar(timesteps: int = 500_000, carregar_modelo: str = None, log_steps: bo
             print(f"[run] --nome ignorado na retomada: a run continua '{run['nome']}'")
     else:
         run = _criar_run(tag_run, bc_path if bc_path and os.path.exists(bc_path) else None)
+        # O currículo persistido é da run ANTERIOR: herdá-lo faria uma run nova começar na noite
+        # para a qual a outra foi promovida. Run nova parte do alvo do .env.
+        if not carregar_modelo and os.path.exists(CurriculumCallback.CAMINHO):
+            os.remove(CurriculumCallback.CAMINHO)
+            print(f"[curriculo] {CurriculumCallback.CAMINHO} da run anterior removido (run nova).")
     origem = f"RETOMADA de {carregar_modelo}" if carregar_modelo else (
         f"NOVO (BC: {bc_path})" if bc_path else "NOVO")
     identificacao = (f"run: {run['nome']} | {origem} | commit {_versao_codigo()} | "
