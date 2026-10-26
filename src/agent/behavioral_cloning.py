@@ -61,6 +61,24 @@ def _corrigir_caminhos_frames(dados: list[dict], caminho_json: str) -> int:
     return faltando
 
 
+def _neutralizar_reabertura_com_flag(dados: list[dict]) -> int:
+    """Troca por 'nada' a ação de REABRIR uma porta com a flag de ameaça daquele lado acesa
+    (registro com a porta fechada, a flag acesa e a ação de porta do mesmo lado).
+
+    É o erro nº 1 do agente (o RL 190k reabria com a flag acesa em 85–89% das vezes). Nas demos ele
+    aparece por um motivo que o agente não enxerga: o humano vê o corredor vazio numa olhada curta,
+    mas o detector só apaga a flag depois de DEBOUNCE_VAZIO leituras (~4 s de luz). Na N2 de 21/out
+    foram 3 de 4 reaberturas; nas N1 antigas, o detector quebrado deixou outras 3. 'nada' é o que o
+    agente deve fazer nesse estado: segurar a porta até a flag apagar. Retorna quantas trocou."""
+    trocadas = 0
+    for d in dados:
+        for lado, nome in (("esq", "porta_esquerda"), ("dir", "porta_direita")):
+            if d.get("nome") == nome and d.get(f"porta_{lado}") and d.get(f"ameaca_{lado}"):
+                d["acao"], d["nome"] = 0, "nada"
+                trocadas += 1
+    return trocadas
+
+
 def _imagem_do_frame(dado: dict) -> np.ndarray:
     """(84,84,1) uint8 — espelha FNAFEnv._capturar_observacao(). Frame ausente = preto."""
     frame = cv2.imread(dado["frame"], cv2.IMREAD_GRAYSCALE)
@@ -96,16 +114,19 @@ class GameplayDataset(Dataset):
     def __init__(self, caminhos_json: list[str]):
         self.dados = []
 
-        reconstruidos = 0
+        reconstruidos = neutralizadas = 0
         for caminho in caminhos_json:
             with open(caminho, "r") as f:
                 dados = json.load(f)
                 _corrigir_caminhos_frames(dados, caminho)
                 reconstruidos += _reconstruir_idade_info(dados)   # datasets pré-run-3 (12 estados)
+                neutralizadas += _neutralizar_reabertura_com_flag(dados)
                 self.dados.extend(dados)
                 print(f"Carregado: {caminho} ({len(dados)} frames)")
 
         print(f"\nTotal combinado: {len(self.dados)} frames")
+        if neutralizadas:
+            print(f"[BC] {neutralizadas} reaberturas de porta com a flag acesa trocadas por 'nada'")
         if reconstruidos:
             print(f"[run 3] idade_info_esq/dir RECONSTRUÍDA em {reconstruidos} frames "
                   f"(datasets gravados antes dos estados 13-14 — proxy: tempo desde a última "
@@ -318,6 +339,9 @@ def _carregar_episodios(caminhos_json: list[str]) -> list[dict]:
             dados = json.load(f)
         _corrigir_caminhos_frames(dados, caminho)
         _reconstruir_idade_info(dados)   # datasets pré-run-3: reconstrói idade_info_esq/dir
+        neutralizadas = _neutralizar_reabertura_com_flag(dados)
+        if neutralizadas:
+            print(f"[BC] {caminho}: {neutralizadas} reaberturas com a flag acesa trocadas por 'nada'")
         episodios.append({
             "imagem":  torch.from_numpy(np.stack([_imagem_do_frame(d) for d in dados])),   # (T,84,84,1) uint8
             "estados": torch.from_numpy(np.stack([_estados_do_frame(d) for d in dados])),  # (T,14) float32
