@@ -223,6 +223,16 @@ Treino do zero com a percepção corrigida, etapas e critérios em
    (subestima ~30%); calibrado, porta 1,6 → 0,5/min (humano 0,4), luz 9,7 (9,7), top-1 igual, macro
    35,6 → 33,0%, H 0,58 → 0,64. Próximo: aplicar no BC novo (pc4), conferir o proxy contra o ritmo
    medido no jogo (porta 1,6–5,7/min) e avaliar 2 blocos curtos, um sem a transmissão.
+
+   **BC calibrado (26/out, pc4):** proxy porta 3,1 → 0,3/min (humano 0,3), total 40,1 → 31,8 (30,1).
+   Avaliação, 2 blocos com a transmissão ligada antes: N1 **4/10 (40%)**, no limite do critério; os
+   dois blocos saíram iguais (a anomalia de 25/out não voltou); 3 mortes por energia em 12 eps;
+   ~46 ações/min no jogo. Treino A emendado: run `2026-10-26_run6_rppo_bc_calibrado`, parado pelo
+   usuário aos ~47,7k steps. No warmup (até 40k, ator quase parado) a N1 deu 24/76 (32%), por
+   janela de 33 eps 6/27 → 9/24 → 9/25; vitórias geridas 3 → 6 → 5; mortes por energia 5 → 7 → 1.
+   H ~1,45–1,55 estável, `ent_coef` no piso, approx_kl 0,003–0,014, explained variance só 0,03–0,21
+   (crítico fraco). Aos 47,7k ainda não dá para julgar o RL (2 updates depois do warmup). Critério
+   para continuar: N1 com vitórias geridas ≥ 25% numa janela de 30 eps depois de 50k.
 3. **Braço A, RecurrentPPO**, a partir do BC novo. Código pronto (9/out): âncora BC ligada, alvo de
    entropia calibrado pela H que o BC entrega no warmup, currículo promovendo só por vitórias
    **geridas**.
