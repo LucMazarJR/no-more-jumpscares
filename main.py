@@ -27,7 +27,14 @@ def encontrar_ultimo_modelo() -> str | None:
 
     numerados = [p for p in glob.glob("modelos/*.zip") if extrair_steps(p) >= 0]
     if numerados:
-        return max(numerados, key=extrair_steps)
+        ultimo = max(numerados, key=extrair_steps)
+        # Parar com Ctrl+C (ou um crash) salva o fnaf_ppo_final DEPOIS do último checkpoint: sem
+        # isto a retomada voltava até 10k steps (~2,5 h). O par dele é o vecnormalize.pkl global,
+        # salvo junto, que é o que o treino usa quando o final não tem vecnormalize próprio.
+        final = "modelos/fnaf_ppo_final.zip"
+        if os.path.exists(final) and os.path.getmtime(final) > os.path.getmtime(ultimo):
+            return final
+        return ultimo
 
     outros = glob.glob("modelos/*.zip")
     return max(outros, key=os.path.getctime) if outros else None
