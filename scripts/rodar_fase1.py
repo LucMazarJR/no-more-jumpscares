@@ -15,6 +15,7 @@ Uso (de um PowerShell, na raiz do projeto, com o jogo FECHADO ou no menu):
     python scripts/rodar_fase1.py --blocos M1,RL,RL340  # curva BC → 190k → 340k
     python scripts/rodar_fase1.py --blocos BC,M1 --trace --ate 08:00            # BC novo × antigo, N1
     python scripts/rodar_fase1.py --blocos BC,M1 --noite 2 --trace --ate 08:00  # idem na N2
+    python scripts/rodar_fase1.py --blocos R6,BC --trace --ate 08:00            # run 6 (78k) × BC calibrado
 
 Blocos: BC = modelos/fnaf_bc.zip (o BC atual); M1/M2 = o BC da Fase 1 (com/sem imagem), guardado
 em modelos/pc_luciano_run4/; RL/RL340 = run 4.
@@ -53,6 +54,8 @@ BC = os.path.join("modelos", "fnaf_bc.zip")   # o BC atual (o que o `main.py bc`
 RL = os.path.join("modelos", "pc_luciano_run4", "pc4_fnaf_ppo_190000_steps.zip")  # fim da run 4
 # Continuação da run 4 (10–11/ago, ~150k steps sem log): mede se o PPO seguiu subindo ou estagnou.
 RL340 = os.path.join("modelos", "pc_luciano_run4", "pc4_fnaf_ppo_340000_steps.zip")
+# Run 6 logo após a promoção para a N2 (77.193 steps): o melhor ponto dela na N1 (geridas 46%).
+R6 = os.path.join("modelos", "pc4_fnaf_ppo_78148_steps.zip")
 LOG = os.path.join("logs", "analise", "fase1_blocos.txt")
 TELA_CALIBRADA = (1920, 1080)    # monitor primário em que o .env deste PC foi calibrado
 JANELA_CALIBRADA = (312, 160)    # canto da janela do jogo em modo janela nessa tela
@@ -64,6 +67,7 @@ CONFIGS = {
     "M2": [BC_ANTIGO, "--ablacao", "imagem"],
     "RL": [RL],
     "RL340": [RL340],
+    "R6": [R6],
 }
 
 
