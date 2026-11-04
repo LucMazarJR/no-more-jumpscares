@@ -233,6 +233,15 @@ Treino do zero com a percepção corrigida, etapas e critérios em
    H ~1,45–1,55 estável, `ent_coef` no piso, approx_kl 0,003–0,014, explained variance só 0,03–0,21
    (crítico fraco). Aos 47,7k ainda não dá para julgar o RL (2 updates depois do warmup). Critério
    para continuar: N1 com vitórias geridas ≥ 25% numa janela de 30 eps depois de 50k.
+
+   **Run 6 até ~226k (26/out 22h53 – 28/out ~16h, parada sem "Treino finalizado"):**
+   - **N1 melhorou com o RL:** vitórias geridas por janela de 40 eps 20% → 18% → **46%** (37 eps,
+     até 77k), mortes por energia 9 → 4 → 2. O currículo promoveu para a N2 aos 77.193 steps.
+   - **N2: 0 vitórias em 403 episódios.** As mortes migraram de animatrônico para energia (3 → 29 por
+     janela de 40) e a sobrevivência mediana subiu de 233 para 421 s: a mesma assinatura da
+     continuação 190k→340k da run 4 (aprende a defender mais, não na hora certa), agora com a
+     percepção corrigida. Depois dos 77k a N1 não é mais praticada (risco de esquecimento).
+   - Checkpoint de referência para a N1: `pc4_fnaf_ppo_78148_steps.zip` (logo após a promoção).
 3. **Braço A, RecurrentPPO**, a partir do BC novo. Código pronto (9/out): âncora BC ligada, alvo de
    entropia calibrado pela H que o BC entrega no warmup, currículo promovendo só por vitórias
    **geridas**.
