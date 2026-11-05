@@ -251,6 +251,11 @@ Treino do zero com a percepção corrigida, etapas e critérios em
      (checagem tardia). Porta segurada: mediana 20,5 s (78k) × 11 s (BC) × 3–5 s (RL 190k antigo);
      reaberturas com a flag acesa 30% × 40% (190k antigo: 85–89%). A percepção e a calibração
      mudaram o hábito de segurar a porta; o que falta é checar a luz a tempo.
+
+   **Decisão (5/nov): braço B, DQfD** (`src/agent/dqfd.py`). Fase 1, offline: `python main.py dqfd
+   --pre` treina só com as demos (transições no tick do agente, recompensa reconstruída pelas
+   fórmulas do env) e compara com o BC nas mesmas transições de validação. Critério para ir ao jogo:
+   igualar o BC (score). A fase 2 (treino online com replay e as demos permanentes) vem depois.
 3. **Braço A, RecurrentPPO**, a partir do BC novo. Código pronto (9/out): âncora BC ligada, alvo de
    entropia calibrado pela H que o BC entrega no warmup, currículo promovendo só por vitórias
    **geridas**.
