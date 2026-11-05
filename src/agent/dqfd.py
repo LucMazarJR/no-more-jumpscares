@@ -82,8 +82,9 @@ def recompensa_transicao(d0: dict, d1: dict | None, venceu: bool) -> float:
 
 
 # ── Transições das demos ─────────────────────────────────────────────────────────────────────
-def carregar_transicoes(caminhos_json: list[str]) -> list[dict]:
-    """Um dict por demo com os tensores das transições no tick do agente (ver docstring do módulo)."""
+def carregar_transicoes(caminhos_json: list[str], fase: int = 0) -> list[dict]:
+    """Um dict por demo com os tensores das transições no tick do agente (ver docstring do módulo).
+    `fase` desloca o início das janelas: as fases 0, 1 e 2 juntas usam todos os registros."""
     episodios = []
     for caminho in sorted(caminhos_json):
         with open(caminho, "r") as f:
@@ -92,7 +93,7 @@ def carregar_transicoes(caminhos_json: list[str]) -> list[dict]:
         _reconstruir_idade_info(dados)
         _neutralizar_reabertura_com_flag(dados)
         venceu = float(dados[-1]["tempo_ep"]) >= FIM_VITORIA_S
-        idx = list(range(0, len(dados), REGISTROS_POR_STEP))
+        idx = list(range(fase, len(dados), REGISTROS_POR_STEP))
         acoes, recompensas = [], []
         for k, i in enumerate(idx):
             janela = dados[i:i + REGISTROS_POR_STEP]
@@ -205,7 +206,8 @@ def avaliar(q_net, ep: dict, device) -> dict:
 
 def pretreinar(caminhos_json: list[str], passos: int = 30_000, lote: int = 64, lr: float = 1e-4,
                alvo_cada: int = 1000, avaliar_cada: int = 1000, seed: int = 0,
-               escala: float = ESCALA_RECOMPENSA, lambda_e: float = LAMBDA_E, caminho_saida: str = CAMINHO_PRE) -> dict:
+               escala: float = ESCALA_RECOMPENSA, lambda_e: float = LAMBDA_E, caminho_saida: str = CAMINHO_PRE,
+               fases_extra: tuple = ()) -> dict:
     """Pré-treino só com as demos. Segura 1 episódio de validação pela mesma regra do BC (a noite
     com mais demos, o episódio com menos ações reais) e guarda o melhor checkpoint pelo score
     (harmônica de top-1 e macro, a mesma do BC)."""
@@ -221,6 +223,8 @@ def pretreinar(caminhos_json: list[str], passos: int = 30_000, lote: int = 64, l
                 key=lambda i: int((episodios[i]["acoes"] != 0).sum()))
     val = episodios[i_val]
     treino = [ep for i, ep in enumerate(episodios) if i != i_val]
+    for fase in fases_extra:   # mais transições das mesmas demos; a validação segue só na fase 0
+        treino += [ep for ep in carregar_transicoes(caminhos_json, fase) if ep["nome"] != val["nome"]]
     refs = [(e, t) for e, ep in enumerate(treino) for t in range(ep["acoes"].shape[0])]
     pesos = _pesos_classe(treino).to(device)
     print(f"\n{len(refs)} transições de treino em {len(treino)} demos; validação '{val['nome']}' "
