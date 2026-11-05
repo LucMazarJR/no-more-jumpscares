@@ -116,6 +116,8 @@ python -m src.utils.gravar_gameplay --noite 2
 
 Leve o jogo até a noite, aperte **F9** para começar, jogue **pelas teclas** (a lista aparece no
 terminal) e aperte **F10** no 6 AM. Uma noite por gravação. Vai para `dados/gameplay_<data>_noiteN/`.
+Cada noite ocupa ~350 MB: além dos frames 84×84 do treino, ficam cópias coloridas em 1280×720 em
+`frames_hd/`, para treinar a leitura das câmeras mais tarde. Não apague.
 Se morrer, aperte **F10 logo**: o gravador não detecta a morte e grava a tela de game over como jogo.
 
 Teclas: `A`/`D` portas, `Q`/`E` luzes, `Tab` abre/fecha a câmera, `1`–`0` e `-` escolhem a câmera.

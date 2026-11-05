@@ -1,4 +1,4 @@
-"""Grava gameplay humano para Behavioral Cloning (dataset.json + frames 84x84).
+"""Grava gameplay humano para Behavioral Cloning (dataset.json + frames 84x84 + frames_hd 1280x720).
 
 Uso:
     python -m src.utils.gravar_gameplay --noite N
@@ -82,6 +82,8 @@ BIPE_ESQ = 1500   # Hz, agudo: Bonnie (porta esquerda)
 BIPE_DIR = 800    # Hz, grave: Chica (porta direita)
 _BIPE_MS = 150
 
+QUALIDADE_JPEG_HD = 90
+
 
 def _bipe(freq: int) -> None:
     """Toca sem travar o loop (winsound.Beep bloqueia pela duração)."""
@@ -116,6 +118,7 @@ def gravar():
     noite = _noite_da_cli()
     pasta = f"gameplay_{datetime.now().strftime('%Y%m%d_%H%M%S')}_noite{noite}"
     os.makedirs(f"dados/{pasta}/frames", exist_ok=True)
+    os.makedirs(f"dados/{pasta}/frames_hd", exist_ok=True)
 
     # Env fantasma = EXECUTOR das ações + fonte de estado + visão (ameaça/energia).
     # O __init__ do FNAFEnv só carrega templates e monta espaços — não abre o jogo.
@@ -247,8 +250,15 @@ def gravar():
             # (i) Registro pendente lido DIRETO do env (campos idênticos aos do RL).
             caminho_frame = f"dados/{pasta}/frames/{frame_idx:06d}.png"
             cv2.imwrite(caminho_frame, frame_pequeno)
+            # Cópia colorida em 1280x720, a mesma referência dos detectores: o 84x84 não dá para
+            # recuperar depois, e é ela que permite treinar a leitura das câmeras mais tarde.
+            # JPEG porque o PNG custaria 32-54 ms por frame no ciclo de 0,25 s (JPEG: ~4 ms, ~320 MB/noite).
+            caminho_hd = f"dados/{pasta}/frames_hd/{frame_idx:06d}.jpg"
+            cv2.imwrite(caminho_hd, cv2.resize(frame, env._ref_size),
+                        [cv2.IMWRITE_JPEG_QUALITY, QUALIDADE_JPEG_HD])
             registro_pendente = {
                 "frame":            caminho_frame,
+                "frame_hd":         caminho_hd,
                 "noite":            noite,
                 "porta_esq":        int(env.porta_esq),
                 "porta_dir":        int(env.porta_dir),
