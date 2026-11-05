@@ -50,6 +50,7 @@ MARGEM = 0.8                # perda de margem grande (artigo: 0,8)
 LAMBDA_N = 1.0              # peso do TD de n passos
 LAMBDA_E = 1.0              # peso da margem
 L2 = 1e-5                   # weight decay
+ESCALA_RECOMPENSA = 0.01    # sem escala (vitória 500) o Q oscilou de 3 a 54; com 0,01 fica estável
 FIM_VITORIA_S = 525.0       # demo que chegou até aqui terminou no 6 AM (a noite dura ~535 s)
 CAMINHO_PRE = "modelos/dqfd_pre.pt"
 
@@ -160,7 +161,7 @@ def _lote(ep_list, refs, device):
     }
 
 
-def perdas_dqfd(q_net, alvo_net, b, pesos_classe, escala: float = 1.0,
+def perdas_dqfd(q_net, alvo_net, b, pesos_classe, escala: float = ESCALA_RECOMPENSA,
                 lambda_e: float = LAMBDA_E) -> tuple[torch.Tensor, dict]:
     """`escala` multiplica as recompensas (a vitória vale 500 e o denso ~0,1 por step: sem escala
     o Q oscilou de 3 a 54 no 1º pré-treino)."""
@@ -204,7 +205,7 @@ def avaliar(q_net, ep: dict, device) -> dict:
 
 def pretreinar(caminhos_json: list[str], passos: int = 30_000, lote: int = 64, lr: float = 1e-4,
                alvo_cada: int = 1000, avaliar_cada: int = 1000, seed: int = 0,
-               escala: float = 1.0, lambda_e: float = LAMBDA_E, caminho_saida: str = CAMINHO_PRE) -> dict:
+               escala: float = ESCALA_RECOMPENSA, lambda_e: float = LAMBDA_E, caminho_saida: str = CAMINHO_PRE) -> dict:
     """Pré-treino só com as demos. Segura 1 episódio de validação pela mesma regra do BC (a noite
     com mais demos, o episódio com menos ações reais) e guarda o melhor checkpoint pelo score
     (harmônica de top-1 e macro, a mesma do BC)."""

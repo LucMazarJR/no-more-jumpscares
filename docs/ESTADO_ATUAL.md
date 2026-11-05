@@ -256,6 +256,12 @@ Treino do zero com a percepção corrigida, etapas e critérios em
    --pre` treina só com as demos (transições no tick do agente, recompensa reconstruída pelas
    fórmulas do env) e compara com o BC nas mesmas transições de validação. Critério para ir ao jogo:
    igualar o BC (score). A fase 2 (treino online com replay e as demos permanentes) vem depois.
+   Resultado (5/nov, pc4, GPU, validação na N1 `gameplay_20260702_113131`): **ainda não iguala.**
+   Score 31,3 sem escala de recompensa (Q instável, 3 → 54); com a recompensa × 0,01 o Q fica
+   estável e o score sobe para **34,0** (top-1 58,9%, macro 23,9%); margem × 3 não muda (34,1). O BC
+   nas mesmas transições: **41,5** (calibrado) e 40,1 (bruto). A diferença está no macro (24 × 31%).
+   Hipótese: o BC é recorrente (LSTM) e o DQfD olha um frame só. Próximo teste offline: memória
+   curta na rede Q (observações empilhadas ou LSTM, estilo R2D3).
 3. **Braço A, RecurrentPPO**, a partir do BC novo. Código pronto (9/out): âncora BC ligada, alvo de
    entropia calibrado pela H que o BC entrega no warmup, currículo promovendo só por vitórias
    **geridas**.
