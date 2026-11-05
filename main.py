@@ -89,6 +89,18 @@ def modo_treino():
             tag_run=_valor_flag("--nome"))
 
 
+def modo_dqfd():
+    """DQfD (braço B). Por enquanto só a fase offline: python main.py dqfd --pre [--passos N]
+    [dataset.json ...]. Pré-treina só com as demos (sem o jogo) e compara com o BC na validação."""
+    from src.agent.dqfd import pretreinar
+    if "--pre" not in sys.argv:
+        print("Uso: python main.py dqfd --pre [--passos N] [dataset.json ...]  (o treino online vem depois)")
+        return
+    passos = int(_valor_flag("--passos") or 30_000)
+    caminhos = [a for a in sys.argv[2:] if a.endswith(".json")] or sorted(glob.glob("dados/*/dataset.json"))
+    pretreinar(caminhos, passos=passos)
+
+
 def modo_bc():
     """Treina Behavioral Cloning a partir de datasets de gameplay humano gravados
     (src/utils/gravar_gameplay.py). Gera modelos/fnaf_bc.zip para warmstart do treino.
@@ -349,9 +361,12 @@ if __name__ == "__main__":
         modo_jogar()
     elif modo == "bc":
         modo_bc()
+    elif modo == "dqfd":
+        modo_dqfd()
     else:
         print(f"Modo desconhecido: {modo}")
         print("Use: python main.py teste | "
               "python main.py treino [--novo] [--bc <zip>] [--nome <tag>] | "
               f"{USO_JOGAR} | "
-              "python main.py bc [dataset.json ...]  (sem args: pega dados/*/dataset.json)")
+              "python main.py bc [dataset.json ...]  (sem args: pega dados/*/dataset.json) | "
+              "python main.py dqfd --pre [--passos N]")
