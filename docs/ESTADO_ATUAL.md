@@ -262,6 +262,17 @@ Treino do zero com a percepção corrigida, etapas e critérios em
    nas mesmas transições: **41,5** (calibrado) e 40,1 (bruto). A diferença está no macro (24 × 31%).
    Hipótese: o BC é recorrente (LSTM) e o DQfD olha um frame só. Próximo teste offline: memória
    curta na rede Q (observações empilhadas ou LSTM, estilo R2D3).
+
+   **Correção (5/nov): a tabela acima tinha dois erros meus.** (1) O BC tinha 3 chances por janela
+   contra 1 do DQfD; com 1 chance, o BC dá **36,5** (bruto) e **34,7** (calibrado), não 40,1 e 41,5.
+   (2) A rede Q recebia a imagem em 0–255, sem a divisão por 255 que o SB3 faz; todos os números de
+   DQfD acima, inclusive o da LSTM (32,6) e o das 3× transições (34,9), estão invalidados.
+   **Refeito (feedforward, 3× transições, 20k passos): 44,1 e 40,5** (top-1 55–58%, macro 31–37%);
+   uma 3ª seed ia em 39,6 aos 16k quando o SSH caiu. **Passa no critério.** A LSTM não foi refeita.
+   Ressalvas: uma só noite de validação, com o melhor checkpoint escolhido nela (o BC também). Porta:
+   ritmo guloso 0–2,6/min nas demos (humano 0–0,6), bem menos inflado que o BC bruto, mas acima do
+   humano; a validação só tem 1 ação de porta (errou, com 7 disparos), e os acertos nas outras demos
+   são dentro da amostra de treino. O teste de verdade é no jogo.
 3. **Braço A, RecurrentPPO**, a partir do BC novo. Código pronto (9/out): âncora BC ligada, alvo de
    entropia calibrado pela H que o BC entrega no warmup, currículo promovendo só por vitórias
    **geridas**.
