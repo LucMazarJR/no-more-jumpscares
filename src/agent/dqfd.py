@@ -452,3 +452,28 @@ def pretreinar_recorrente(caminhos_json: list[str], passos: int = 10_000, n_seq:
     for c in sorted(melhor_info["recall"]):
         print(f"    {ACOES.get(c, c):<20} {melhor_info['recall'][c]*100:5.1f}%")
     return melhor_info
+
+
+# ── Jogar com a rede pré-treinada (`main.py jogar --modelo modelos/<...>.pt`) ────────────────
+EPSILON_JOGO = 0.01         # com --estocastico: a política de exploração mínima do DQN
+
+
+class AgenteDQfD:
+    """Adaptador com a interface .predict do SB3, para o `jogar` reaproveitar trace e log. Só a
+    rede sem memória (RedeQ). Gulosa; com deterministic=False, ε-greedy com EPSILON_JOGO. O DQN não
+    sorteia como o PPO: sem ε, um estado repetido dá sempre a mesma ação."""
+
+    def __init__(self, caminho: str, observation_space):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        ck = torch.load(caminho, map_location=self.device)
+        self.rede = RedeQ(observation_space).to(self.device)
+        self.rede.load_state_dict(ck["estado"])
+        self.rede.eval()
+
+    @torch.no_grad()
+    def predict(self, obs: dict, deterministic: bool = True):
+        if not deterministic and random.random() < EPSILON_JOGO:
+            return np.array(random.randrange(NUM_ACOES)), None
+        t = {"imagem": torch.as_tensor(obs["imagem"], device=self.device).unsqueeze(0),
+             "estados": torch.as_tensor(obs["estados"], device=self.device).unsqueeze(0)}
+        return np.array(int(self.rede(t).argmax(dim=1))), None

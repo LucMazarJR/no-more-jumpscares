@@ -16,6 +16,7 @@ Uso (de um PowerShell, na raiz do projeto, com o jogo FECHADO ou no menu):
     python scripts/rodar_fase1.py --blocos BC,M1 --trace --ate 08:00            # BC novo × antigo, N1
     python scripts/rodar_fase1.py --blocos BC,M1 --noite 2 --trace --ate 08:00  # idem na N2
     python scripts/rodar_fase1.py --blocos R6,BC --trace --ate 08:00            # run 6 (78k) × BC calibrado
+    python scripts/rodar_fase1.py --blocos DQ,BC --trace --ate 08:00            # DQfD pré-treinado × BC calibrado
 
 Blocos: BC = modelos/fnaf_bc.zip (o BC atual); M1/M2 = o BC da Fase 1 (com/sem imagem), guardado
 em modelos/pc_luciano_run4/; RL/RL340 = run 4.
@@ -56,6 +57,7 @@ RL = os.path.join("modelos", "pc_luciano_run4", "pc4_fnaf_ppo_190000_steps.zip")
 RL340 = os.path.join("modelos", "pc_luciano_run4", "pc4_fnaf_ppo_340000_steps.zip")
 # Run 6 logo após a promoção para a N2 (77.193 steps): o melhor ponto dela na N1 (geridas 46%).
 R6 = os.path.join("modelos", "pc4_fnaf_ppo_78148_steps.zip")
+DQ = os.path.join("modelos", "dqfd_pre_3x_s0.pt")   # DQfD pré-treinado só com as demos (score 44,1)
 LOG = os.path.join("logs", "analise", "fase1_blocos.txt")
 TELA_CALIBRADA = (1920, 1080)    # monitor primário em que o .env deste PC foi calibrado
 JANELA_CALIBRADA = (312, 160)    # canto da janela do jogo em modo janela nessa tela
@@ -68,6 +70,7 @@ CONFIGS = {
     "RL": [RL],
     "RL340": [RL340],
     "R6": [R6],
+    "DQ": [DQ],
 }
 
 

@@ -172,6 +172,7 @@ def modo_jogar():
 
       --modelo <zip>   modelo a avaliar (default: o checkpoint mais avançado de modelos/).
                        Aceita o próprio modelos/fnaf_bc.zip → mede o BC PURO, sem RL.
+                       Um .pt é uma rede DQfD pré-treinada (src/agent/dqfd.py).
       --estocastico    amostra a ação (como no TREINO) em vez do argmax. Use p/ comparar com
                        as taxas de vitória dos logs de treino, que são estocásticas.
       --noite N        mira a noite N (exige FNAF_RESET_METODO=continue): morrer na N → Continue.
@@ -217,7 +218,9 @@ def modo_jogar():
 
     # USAR_LSTM=True carrega RecurrentPPO e propaga o estado da LSTM (igual ao treino).
     from src.agent.train import USAR_LSTM as usar_lstm, _versao_codigo
-    config = (f"modelo {caminho} | {'LSTM' if usar_lstm else 'PPO'} | "
+    eh_dqfd = caminho.endswith(".pt")
+    usar_lstm = usar_lstm and not eh_dqfd
+    config = (f"modelo {caminho} | {'DQfD' if eh_dqfd else 'LSTM' if usar_lstm else 'PPO'} | "
               f"{'estocástico' if estocastico else 'determinístico'} | "
               f"noite alvo {noite_alvo or '-'} | ablação {ablacao or '-'} | "
               + ("DIAGNÓSTICO segurar porta | " if segurar_porta else "") +
@@ -230,7 +233,10 @@ def modo_jogar():
     env._log_desyncs_path = "logs/analise/avaliacoes_desyncs.log"
     if noite_alvo:
         env.noite_desejada = noite_alvo
-    if usar_lstm:
+    if eh_dqfd:
+        from src.agent.dqfd import AgenteDQfD
+        modelo = AgenteDQfD(caminho, env.observation_space)
+    elif usar_lstm:
         from sb3_contrib import RecurrentPPO
         modelo = RecurrentPPO.load(caminho, env=env)
     else:
