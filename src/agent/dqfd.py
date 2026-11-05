@@ -160,14 +160,17 @@ def _lote(ep_list, refs, device):
     }
 
 
-def perdas_dqfd(q_net, alvo_net, b, pesos_classe) -> tuple[torch.Tensor, dict]:
+def perdas_dqfd(q_net, alvo_net, b, pesos_classe, escala: float = 1.0,
+                lambda_e: float = LAMBDA_E) -> tuple[torch.Tensor, dict]:
+    """`escala` multiplica as recompensas (a vitória vale 500 e o denso ~0,1 por step: sem escala
+    o Q oscilou de 3 a 54 no 1º pré-treino)."""
     q = q_net(b["obs"])
     q_a = q.gather(1, b["acao"].unsqueeze(1)).squeeze(1)
     with torch.no_grad():
         a1 = q_net(b["obs1"]).argmax(dim=1, keepdim=True)                     # double DQN
-        y1 = b["r"] + GAMMA * (1 - b["feito"]) * alvo_net(b["obs1"]).gather(1, a1).squeeze(1)
+        y1 = escala * b["r"] + GAMMA * (1 - b["feito"]) * alvo_net(b["obs1"]).gather(1, a1).squeeze(1)
         an = q_net(b["obsn"]).argmax(dim=1, keepdim=True)
-        yn = b["ret_n"] + (GAMMA ** N_PASSOS) * b["tem_boot"] * alvo_net(b["obsn"]).gather(1, an).squeeze(1)
+        yn = escala * b["ret_n"] + (GAMMA ** N_PASSOS) * b["tem_boot"] * alvo_net(b["obsn"]).gather(1, an).squeeze(1)
     j_td = F.smooth_l1_loss(q_a, y1)
     j_n = F.smooth_l1_loss(q_a, yn)
     margem = torch.full_like(q, MARGEM)
@@ -175,7 +178,7 @@ def perdas_dqfd(q_net, alvo_net, b, pesos_classe) -> tuple[torch.Tensor, dict]:
     w = pesos_classe[b["acao"]]
     j_e = ((q + margem).max(dim=1).values - q_a)
     j_e = (w * j_e).sum() / w.sum().clamp_min(1e-8)
-    total = j_td + LAMBDA_N * j_n + LAMBDA_E * j_e
+    total = j_td + LAMBDA_N * j_n + lambda_e * j_e
     return total, {"td": j_td.item(), "n": j_n.item(), "margem": j_e.item(), "q_medio": q_a.mean().item()}
 
 
@@ -200,7 +203,8 @@ def avaliar(q_net, ep: dict, device) -> dict:
 
 
 def pretreinar(caminhos_json: list[str], passos: int = 30_000, lote: int = 64, lr: float = 1e-4,
-               alvo_cada: int = 1000, avaliar_cada: int = 1000, seed: int = 0) -> dict:
+               alvo_cada: int = 1000, avaliar_cada: int = 1000, seed: int = 0,
+               escala: float = 1.0, lambda_e: float = LAMBDA_E, caminho_saida: str = CAMINHO_PRE) -> dict:
     """Pré-treino só com as demos. Segura 1 episódio de validação pela mesma regra do BC (a noite
     com mais demos, o episódio com menos ações reais) e guarda o melhor checkpoint pelo score
     (harmônica de top-1 e macro, a mesma do BC)."""
@@ -229,7 +233,7 @@ def pretreinar(caminhos_json: list[str], passos: int = 30_000, lote: int = 64, l
     avaliar_cada = min(avaliar_cada, passos)
     for passo in range(1, passos + 1):
         b = _lote(treino, random.sample(refs, lote), device)
-        perda, info = perdas_dqfd(q_net, alvo_net, b, pesos)
+        perda, info = perdas_dqfd(q_net, alvo_net, b, pesos, escala, lambda_e)
         opt.zero_grad()
         perda.backward()
         nn.utils.clip_grad_norm_(q_net.parameters(), 10.0)
@@ -248,9 +252,9 @@ def pretreinar(caminhos_json: list[str], passos: int = 30_000, lote: int = 64, l
                 melhor, melhor_info = score, m
                 torch.save({"estado": q_net.state_dict(), "passo": passo, "score": score,
                             "demos": [ep["nome"] for ep in episodios], "validacao": val["nome"]},
-                           CAMINHO_PRE)
+                           caminho_saida)
     print(f"\n>>> melhor score {melhor*100:.1f} (top-1 {melhor_info['top1']*100:.1f}% | macro "
-          f"{melhor_info['macro']*100:.1f}% | ritmo {melhor_info['ritmo']:.1f}/min) salvo em {CAMINHO_PRE}")
+          f"{melhor_info['macro']*100:.1f}% | ritmo {melhor_info['ritmo']:.1f}/min) salvo em {caminho_saida}")
     print("Recall por classe (validação):")
     for c in sorted(melhor_info["recall"]):
         print(f"    {ACOES.get(c, c):<20} {melhor_info['recall'][c]*100:5.1f}%")
