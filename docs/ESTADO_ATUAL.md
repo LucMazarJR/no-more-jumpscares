@@ -242,6 +242,15 @@ Treino do zero com a percepção corrigida, etapas e critérios em
      continuação 190k→340k da run 4 (aprende a defender mais, não na hora certa), agora com a
      percepção corrigida. Depois dos 77k a N1 não é mais praticada (risco de esquecimento).
    - Checkpoint de referência para a N1: `pc4_fnaf_ppo_78148_steps.zip` (logo após a promoção).
+   - **Avaliação intercalada (4–5/nov, 8 blocos, pc4, transmissão ligada antes):** N1 do 78k **9/20
+     (45%)** × BC calibrado **6/20 (30%)** (p ≈ 0,5), mas vitórias **geridas iguais: 5/20 × 5/20**;
+     o 78k ganhou 4 por apagão (sorte) contra 1. Mortes por energia na N1: 3 × 3. Ações/min 54–56 ×
+     47 (humano ~30). Os 46% de geridas vistos no treino não se repetiram: **o RL não agregou de
+     forma mensurável na N1.**
+   - N2: 0/8 (78k) e 0/6 (BC). Mortes com a porta esquerda aberta e a flag **apagada**: 5/8 e 4/6
+     (checagem tardia). Porta segurada: mediana 20,5 s (78k) × 11 s (BC) × 3–5 s (RL 190k antigo);
+     reaberturas com a flag acesa 30% × 40% (190k antigo: 85–89%). A percepção e a calibração
+     mudaram o hábito de segurar a porta; o que falta é checar a luz a tempo.
 3. **Braço A, RecurrentPPO**, a partir do BC novo. Código pronto (9/out): âncora BC ligada, alvo de
    entropia calibrado pela H que o BC entrega no warmup, currículo promovendo só por vitórias
    **geridas**.
