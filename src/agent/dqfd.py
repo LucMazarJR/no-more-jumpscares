@@ -275,8 +275,8 @@ def pretreinar(caminhos_json: list[str], passos: int = 30_000, lote: int = 64, l
 
 @torch.no_grad()
 def avaliar_bc_no_tick(zip_bc: str, caminho_json: str, device) -> dict:
-    """O BC (recorrente) prevê por REGISTRO; para comparar com o DQfD no tick do agente, a previsão
-    da janela é a 1ª ação real que o BC daria (argmax) nos registros dela, como no rótulo."""
+    """O BC (recorrente) prevê por REGISTRO; para comparar com o DQfD no tick do agente, vale a
+    previsão (argmax) no 1º registro da janela, com o estado oculto propagado por todos."""
     from sb3_contrib import RecurrentPPO
     from src.agent.behavioral_cloning import _carregar_episodios, _chunks_episodio, _estado_lstm_zero
     modelo = RecurrentPPO.load(zip_bc, device=device)
@@ -291,7 +291,7 @@ def avaliar_bc_no_tick(zip_bc: str, caminho_json: str, device) -> dict:
     acertos, total, n_reais = Counter(), Counter(), 0
     for i in range(0, len(rot), REGISTROS_POR_STEP):
         a = next((x for x in rot[i:i + REGISTROS_POR_STEP] if x != 0), 0)
-        p = next((x for x in pred[i:i + REGISTROS_POR_STEP] if x != 0), 0)
+        p = pred[i]   # só o 1º registro: é a obs que o DQfD vê (a janela inteira daria 3 chances ao BC)
         total[a] += 1
         acertos[a] += int(a == p)
         n_reais += int(p != 0)
