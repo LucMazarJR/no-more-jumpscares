@@ -138,7 +138,8 @@ class RedeQ(nn.Module):
         self.vantagem = nn.Sequential(nn.Linear(dim, 128), nn.ReLU(), nn.Linear(128, NUM_ACOES))
 
     def forward(self, obs: dict) -> torch.Tensor:
-        z = self.extractor(obs)
+        # O SB3 divide a imagem por 255 antes do extractor (preprocess_obs); aqui é por nossa conta.
+        z = self.extractor({"imagem": obs["imagem"].float() / 255.0, "estados": obs["estados"]})
         a = self.vantagem(z)
         return self.valor(z) + a - a.mean(dim=1, keepdim=True)
 
@@ -320,7 +321,7 @@ class RedeQRecorrente(nn.Module):
     def forward(self, imagem, estados, h=None):
         """imagem (B,T,84,84,1), estados (B,T,14) → Q (B,T,NUM_ACOES), h."""
         B, T = estados.shape[:2]
-        z = self.extractor({"imagem": imagem.reshape(B * T, *imagem.shape[2:]),
+        z = self.extractor({"imagem": imagem.reshape(B * T, *imagem.shape[2:]).float() / 255.0,
                             "estados": estados.reshape(B * T, -1)}).reshape(B, T, -1)
         s, h = self.lstm(z, h)
         a = self.vantagem(s)
