@@ -295,3 +295,155 @@ def avaliar_bc_no_tick(zip_bc: str, caminho_json: str, device) -> dict:
     return {"top1": sum(acertos.values()) / max(sum(total.values()), 1),
             "macro": sum(recall.values()) / max(len(recall), 1),
             "ritmo": n_reais / max(ep["minutos"], 1e-9)}
+
+
+# ── Versão recorrente (estilo R2D3): a mesma memória do BC ───────────────────────────────────
+# Hipótese: a diferença para o BC no macro vem de o DQfD feedforward ver um frame só. Sequências
+# com burn-in: os primeiros BURN_IN passos só aquecem a LSTM (sem perda), porque o estado oculto
+# real daquele ponto não está guardado; ele parte de zero.
+BURN_IN = 20
+TREINO_SEQ = 40
+
+
+class RedeQRecorrente(nn.Module):
+    def __init__(self, observation_space, oculto: int = 128):
+        super().__init__()
+        self.extractor = MultimodalExtractor(observation_space)
+        self.lstm = nn.LSTM(self.extractor.features_dim, oculto, batch_first=True)
+        self.valor = nn.Linear(oculto, 1)
+        self.vantagem = nn.Linear(oculto, NUM_ACOES)
+
+    def forward(self, imagem, estados, h=None):
+        """imagem (B,T,84,84,1), estados (B,T,14) → Q (B,T,NUM_ACOES), h."""
+        B, T = estados.shape[:2]
+        z = self.extractor({"imagem": imagem.reshape(B * T, *imagem.shape[2:]),
+                            "estados": estados.reshape(B * T, -1)}).reshape(B, T, -1)
+        s, h = self.lstm(z, h)
+        a = self.vantagem(s)
+        return self.valor(s) + a - a.mean(dim=2, keepdim=True), h
+
+
+def _lote_seq(episodios, n_seq, device):
+    """Janelas de BURN_IN + TREINO_SEQ + N_PASSOS, com início sorteado em todo o episódio. O que
+    passa do fim repete o último passo e fica de fora da perda (máscara 0). Janela que começa em
+    t=0 não precisa de burn-in: o estado zero é o estado real."""
+    L = BURN_IN + TREINO_SEQ + N_PASSOS
+    lote = {k: [] for k in ("imagem", "estados", "acao", "r", "ret_n", "feito", "tem_boot", "perda")}
+    for _ in range(n_seq):
+        ep = random.choice(episodios)
+        T = ep["acoes"].shape[0]
+        t0 = random.randint(0, max(T - BURN_IN - 1, 0))
+        pos = torch.arange(t0, t0 + L)
+        idx = pos.clamp_max(T - 1)
+        lote["imagem"].append(ep["imagem"][idx])
+        lote["estados"].append(ep["estados"][idx])
+        lote["acao"].append(ep["acoes"][idx])
+        lote["r"].append(ep["recompensas"][idx])
+        lote["ret_n"].append(ep["ret_n"][idx])
+        lote["feito"].append((pos >= T - 1).float())
+        lote["tem_boot"].append((ep["boot_n"][idx] >= 0).float())
+        na_janela = torch.zeros(L)
+        na_janela[BURN_IN if t0 > 0 else 0:BURN_IN + TREINO_SEQ] = 1.0
+        lote["perda"].append(na_janela * (pos < T).float())
+    return {k: torch.stack(v).to(device) for k, v in lote.items()}
+
+
+def perdas_recorrente(q_net, alvo_net, b, pesos_classe, escala=ESCALA_RECOMPENSA, lambda_e=LAMBDA_E):
+    q, _ = q_net(b["imagem"], b["estados"])
+    with torch.no_grad():
+        q_alvo, _ = alvo_net(b["imagem"], b["estados"])
+    L = q.shape[1]
+    i = torch.arange(L, device=q.device)
+    i1, iN = (i + 1).clamp_max(L - 1), (i + N_PASSOS).clamp_max(L - 1)
+    q_a = q.gather(2, b["acao"].unsqueeze(2)).squeeze(2)
+    with torch.no_grad():
+        a1 = q[:, i1].argmax(dim=2, keepdim=True)                              # double DQN
+        y1 = escala * b["r"] + GAMMA * (1 - b["feito"]) * q_alvo[:, i1].gather(2, a1).squeeze(2)
+        an = q[:, iN].argmax(dim=2, keepdim=True)
+        yn = escala * b["ret_n"] + (GAMMA ** N_PASSOS) * b["tem_boot"] * q_alvo[:, iN].gather(2, an).squeeze(2)
+    m = b["perda"]
+    n = m.sum().clamp_min(1.0)
+    j_td = (F.smooth_l1_loss(q_a, y1, reduction="none") * m).sum() / n
+    j_n = (F.smooth_l1_loss(q_a, yn, reduction="none") * m).sum() / n
+    margem = torch.full_like(q, MARGEM)
+    margem.scatter_(2, b["acao"].unsqueeze(2), 0.0)
+    w = pesos_classe[b["acao"]] * m
+    j_e = (w * ((q + margem).max(dim=2).values - q_a)).sum() / w.sum().clamp_min(1e-8)
+    total = j_td + LAMBDA_N * j_n + lambda_e * j_e
+    return total, {"td": j_td.item(), "n": j_n.item(), "margem": j_e.item(),
+                   "q_medio": ((q_a * m).sum() / n).item()}
+
+
+@torch.no_grad()
+def avaliar_recorrente(q_net, ep: dict, device) -> dict:
+    """Como avaliar(), mas propagando o estado oculto pelo episódio inteiro, como no jogo."""
+    acertos, total, preds, h = Counter(), Counter(), [], None
+    for ini in range(0, ep["acoes"].shape[0], 256):
+        q, h = q_net(ep["imagem"][ini:ini + 256].unsqueeze(0).to(device),
+                     ep["estados"][ini:ini + 256].unsqueeze(0).to(device), h)
+        preds.append(q[0].argmax(dim=1).cpu())
+    pred = torch.cat(preds)
+    for a, p in zip(ep["acoes"].tolist(), pred.tolist()):
+        total[a] += 1
+        acertos[a] += int(a == p)
+    recall = {c: acertos[c] / n for c, n in total.items()}
+    return {"top1": sum(acertos.values()) / max(sum(total.values()), 1),
+            "macro": sum(recall.values()) / max(len(recall), 1),
+            "ritmo": float((pred != 0).sum()) / max(ep["minutos"], 1e-9),
+            "ritmo_humano": float((ep["acoes"] != 0).sum()) / max(ep["minutos"], 1e-9),
+            "recall": recall}
+
+
+def pretreinar_recorrente(caminhos_json: list[str], passos: int = 10_000, n_seq: int = 16, lr: float = 1e-4,
+                          alvo_cada: int = 500, avaliar_cada: int = 500, seeds: tuple = (0, 1, 2, 3),
+                          caminho_saida: str = "modelos/dqfd_pre_lstm.pt") -> dict:
+    """Pré-treino recorrente, com o mesmo split e o mesmo score do feedforward. Quatro seeds, porque
+    o BC fica com o melhor de 4 inits: a comparação precisa dar a mesma chance aos dois."""
+    from src.agent.behavioral_cloning import _pesos_classe, _score_clone
+    from src.environment.fnaf_env import FNAFEnv
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    episodios = carregar_transicoes(caminhos_json)
+    noites = Counter(ep["noite"] for ep in episodios)
+    noite_val = max(noites, key=lambda n: (noites[n], -n))
+    i_val = min((i for i, ep in enumerate(episodios) if ep["noite"] == noite_val),
+                key=lambda i: int((episodios[i]["acoes"] != 0).sum()))
+    val = episodios[i_val]
+    treino = [ep for i, ep in enumerate(episodios) if i != i_val]
+    pesos = _pesos_classe(treino).to(device)
+    espaco = FNAFEnv().observation_space
+    print(f"\nvalidação '{val['nome']}' | {len(treino)} demos de treino | device {device}", flush=True)
+    melhor_global, melhor_info = -1.0, None
+    for seed in seeds:
+        random.seed(seed)
+        torch.manual_seed(seed)
+        q_net, alvo_net = RedeQRecorrente(espaco).to(device), RedeQRecorrente(espaco).to(device)
+        alvo_net.load_state_dict(q_net.state_dict())
+        opt = torch.optim.Adam(q_net.parameters(), lr=lr, weight_decay=L2)
+        melhor = -1.0
+        for passo in range(1, passos + 1):
+            perda, info = perdas_recorrente(q_net, alvo_net, _lote_seq(treino, n_seq, device), pesos)
+            opt.zero_grad()
+            perda.backward()
+            nn.utils.clip_grad_norm_(q_net.parameters(), 10.0)
+            opt.step()
+            if passo % alvo_cada == 0:
+                alvo_net.load_state_dict(q_net.state_dict())
+            if passo % avaliar_cada == 0:
+                m = avaliar_recorrente(q_net, val, device)
+                score = _score_clone(m["top1"], m["macro"])
+                melhor = max(melhor, score)
+                print(f"seed {seed} passo {passo:6d} | td {info['td']:.3f} n {info['n']:.3f} margem "
+                      f"{info['margem']:.3f} Q {info['q_medio']:6.2f} | val top-1 {m['top1']*100:5.1f}% "
+                      f"macro {m['macro']*100:5.1f}% score {score*100:5.1f} | ritmo {m['ritmo']:5.1f}/min "
+                      f"(humano {m['ritmo_humano']:.1f})", flush=True)
+                if score > melhor_global:
+                    melhor_global, melhor_info = score, m
+                    torch.save({"estado": q_net.state_dict(), "seed": seed, "passo": passo, "score": score,
+                                "demos": [ep["nome"] for ep in episodios], "validacao": val["nome"]},
+                               caminho_saida)
+        print(f">>> seed {seed}: melhor score {melhor*100:.1f}", flush=True)
+    print(f"\n>>> MELHOR GERAL score {melhor_global*100:.1f} (top-1 {melhor_info['top1']*100:.1f}% | macro "
+          f"{melhor_info['macro']*100:.1f}% | ritmo {melhor_info['ritmo']:.1f}/min) salvo em {caminho_saida}")
+    for c in sorted(melhor_info["recall"]):
+        print(f"    {ACOES.get(c, c):<20} {melhor_info['recall'][c]*100:5.1f}%")
+    return melhor_info

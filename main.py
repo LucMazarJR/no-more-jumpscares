@@ -98,6 +98,10 @@ def modo_dqfd():
         return
     passos = int(_valor_flag("--passos") or 30_000)
     caminhos = [a for a in sys.argv[2:] if a.endswith(".json")] or sorted(glob.glob("dados/*/dataset.json"))
+    if "--lstm" in sys.argv:
+        from src.agent.dqfd import pretreinar_recorrente
+        pretreinar_recorrente(caminhos, passos=int(_valor_flag("--passos") or 10_000))
+        return
     pretreinar(caminhos, passos=passos)
 
 
