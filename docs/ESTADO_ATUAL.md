@@ -273,6 +273,10 @@ Treino do zero com a percepção corrigida, etapas e critérios em
    ritmo guloso 0–2,6/min nas demos (humano 0–0,6), bem menos inflado que o BC bruto, mas acima do
    humano; a validação só tem 1 ação de porta (errou, com 7 disparos), e os acertos nas outras demos
    são dentro da amostra de treino. O teste de verdade é no jogo.
+   Próximo: `rodar_fase1.py --blocos DQ,BC --rodadas 4 --trace` no pc4. Critério registrado antes de
+   rodar, para construir o treino online: N1 do DQ ≥ a do BC na mesma noite, em vitórias geridas, e
+   energia sem dominar as mortes. Atenção: nas demos ele age em ~80% dos steps da N2 (~45/min, humano
+   ~27), então o excesso de ações pode voltar.
 3. **Braço A, RecurrentPPO**, a partir do BC novo. Código pronto (9/out): âncora BC ligada, alvo de
    entropia calibrado pela H que o BC entrega no warmup, currículo promovendo só por vitórias
    **geridas**.
