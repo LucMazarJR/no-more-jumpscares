@@ -238,7 +238,8 @@ def gravar():
 
             # (g) Energia: simulação wall-clock re-ancorada pela FOTO (photo-primary).
             env._atualizar_energia()
-            env.energia = validar_leitura_energia(env._ler_energia(frame_ref), env.energia)
+            env.energia, env._energia_pendente = validar_leitura_energia(
+                env._ler_energia(frame_ref), env.energia, env._energia_pendente)
 
             # (h) Relógios e cooldowns (0.25s/tick — o dimensionamento original dos
             # cooldowns, que cobrem as animações de ~0.75-1.0s).

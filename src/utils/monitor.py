@@ -75,6 +75,7 @@ def main():
     keyboard.on_press_key("f8", lambda _e: pedido_salvar.append(True))
     pasta_quadros = Path("debug/quadros")
     filtrada = None
+    energia_pendente = None
     ameaca_e = ameaca_d = False               # estados HELD (memória)
     n_vazio = n_rosto = n_chica_off = 0        # contadores de debounce (anti-estática)
     try:
@@ -95,7 +96,7 @@ def main():
             if filtrada is None:
                 filtrada = float(lido) if lido is not None else None
             else:
-                filtrada = validar_leitura_energia(lido, filtrada)
+                filtrada, energia_pendente = validar_leitura_energia(lido, filtrada, energia_pendente)
             # Bonnie HELD: a MESMA função do env (antes o monitor tinha uma cópia da lógica).
             ameaca_e, n_rosto, n_vazio, _ = decidir_bonnie(
                 ameaca_e, n_rosto, n_vazio, rosto=rosto, janela=janela)

@@ -55,15 +55,22 @@ def _testar_proximidade() -> bool:
     sequencia = [
         (49, 49.0),    # leitura boa → re-ancora
         (None, None),  # câmera aberta: sem leitura → mantém a simulação
-        (20, 20.0),    # queda GRANDE real (Foxy em câmera): decréscimo → ACEITA
-        (60, None),    # subiu → impossível → rejeita
-        (8, 8.0),      # 1 dígito, decréscimo → aceita
+        (39, None),    # dígito lido errado (49 → 39): salto → espera confirmação
+        (48, 48.0),    # a leitura certa volta → segue a foto e esquece o salto
+        (20, None), (20, None), (20, None),   # queda real (Foxy): se repete...
+        (20, 20.0),    # ... e na 4ª leitura é aceita
+        (60, None),    # subiu: uma leitura só não vale
+        (8, None), (8, None), (8, None),
+        (8, 8.0),      # queda grande real de novo
+        (18, None), (18, None), (18, None),
+        (18, 18.0),    # estimativa errada: a foto repetida corrige também para cima
     ]
     ok = True
+    pendente = None
     for lido, esperado in sequencia:
         estimativa = round(estimativa - DRENO, 2)          # simulação drena (inferência)
         antes = estimativa
-        estimativa = validar_leitura_energia(lido, estimativa)
+        estimativa, pendente = validar_leitura_energia(lido, estimativa, pendente)
         alvo = antes if esperado is None else esperado
         certo = abs(estimativa - alvo) < 0.01
         ok = ok and certo

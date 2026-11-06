@@ -334,17 +334,32 @@ ENERGIA_Y = (620, 650)
 ENERGIA_LIMIAR_GLIFO = 0.40  # match mínimo p/ aceitar como dígito (abaixo = ambíguo)
 
 
-def validar_leitura_energia(lido, estimativa: float) -> float:
-    """Filtro photo-primary: a foto é a verdade. A simulação (estimativa) desalinha
-    fácil e o Foxy tira grandes pedaços de uma vez, então NÃO se rejeita queda por
-    magnitude. Só barra o impossível (energia subir) e segura quando não há leitura
-    (None); todo decréscimo — inclusive grande — é aceito e re-ancora a estimativa.
-    O reader já devolve None em vez de meio número, então não chega leitura partida."""
+SALTO_ENERGIA = 3.0        # leitura abaixo da estimativa por ≥ isto (ou acima por > 1) precisa se repetir
+CONFIRMACOES_ENERGIA = 4   # leituras seguidas do mesmo valor (±1) para aceitar um salto
+
+
+def validar_leitura_energia(lido, estimativa: float, pendente=None) -> tuple[float, tuple | None]:
+    """Filtro da energia: a foto é a verdade, mas um dígito pode sair errado. Devolve
+    (energia, pendente), onde pendente = (valor, n) é o salto aguardando confirmação.
+
+      - Sem leitura (câmera/flicker/0%): mantém a estimativa.
+      - Perto da estimativa (queda < SALTO_ENERGIA, subida ≤ 1): re-ancora na foto.
+      - Salto, nos DOIS sentidos: só vale depois de CONFIRMACOES_ENERGIA leituras seguidas do mesmo
+        valor (±1). O Foxy tira um pedaço real, que se repete a cada leitura; o dígito lido errado
+        sobre um fundo claro passa. E uma estimativa errada volta a se corrigir pela foto.
+
+    Antes, toda queda era aceita e toda subida recusada: na demo de N2 de 06/11 um 95 lido como 85
+    (faixa clara da CAM atrás do número) travou o estado 10 pontos abaixo da tela, recusando os
+    94% certos como "energia subindo"."""
     if lido is None:
-        return estimativa                          # sem leitura (câmera/flicker/0%): mantém
-    if lido > estimativa + 1.0:
-        return estimativa                          # subiu: impossível → erro de leitura
-    return float(lido)                             # decréscimo (inclui Foxy) → re-ancora na foto
+        return estimativa, pendente
+    if -SALTO_ENERGIA < lido - estimativa <= 1.0:
+        return float(lido), None
+    n = pendente[1] + 1 if pendente is not None and abs(pendente[0] - lido) <= 1 else 1
+    if n >= CONFIRMACOES_ENERGIA:
+        return float(lido), None
+    return estimativa, (lido, n)
+
 
 CHECKPOINTS_NOITE = [
     (0,   100.0),
@@ -439,6 +454,7 @@ class FNAFEnv(gym.Env):
         self.contador_nada = 0
         self.episode_start_time = None
         self._t_ultima_energia = None
+        self._energia_pendente = None   # salto de energia aguardando confirmação
         self._dt_step                 = 0.7  # Δt do step (recalculado em _atualizar_energia)
         self._t_ultima_camera         = None  # última vez (perf_counter) com a câmera aberta — 12º estado
         self._t_confirmacao_esq       = None  # última leitura DEFINITIVA do lado esq — 13º estado
@@ -847,6 +863,7 @@ class FNAFEnv(gym.Env):
             time.sleep(20)
         self.episode_start_time = time.perf_counter()
         self._t_ultima_energia  = self.episode_start_time
+        self._energia_pendente  = None
         self._t_ultima_camera   = self.episode_start_time  # noite começa "recém-checada" (risco Foxy 0)
         # Idade da informação idem: à meia-noite os corredores estão comprovadamente vazios
         # (o jogo dá o grace period) — os relógios partem de "fresco" e envelhecem dali.
@@ -1298,9 +1315,10 @@ class FNAFEnv(gym.Env):
         frame_cinza = self._capturar_janela()
         self._atualizar_ameaca(frame_cinza)
         # Decisão 4B — energia REAL: corrige a energia simulada com a leitura visual do
-        # "Power left: XX%" (photo-primary: None mantém a simulação, subida é rejeitada,
-        # queda re-ancora na foto). A simulação (_atualizar_energia) preenche entre leituras.
-        self.energia = validar_leitura_energia(self._ler_energia(frame_cinza), self.energia)
+        # "Power left: XX%" (validar_leitura_energia: salto só vale confirmado). A simulação
+        # (_atualizar_energia) preenche entre leituras.
+        self.energia, self._energia_pendente = validar_leitura_energia(
+            self._ler_energia(frame_cinza), self.energia, self._energia_pendente)
         frame = cv2.resize(frame_cinza, (LARGURA, ALTURA))
         frame = np.expand_dims(frame, axis=-1)
 
