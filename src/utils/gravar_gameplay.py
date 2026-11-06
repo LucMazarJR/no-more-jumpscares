@@ -240,6 +240,8 @@ def gravar():
             env._atualizar_energia()
             env.energia, env._energia_pendente = validar_leitura_energia(
                 env._ler_energia(frame_ref), env.energia, env._energia_pendente)
+            if env.energia <= 0:   # apagão: desliga tudo, igual ao step (o estado não pode dizer "luz acesa")
+                env.porta_esq = env.porta_dir = env.luz_esq = env.luz_dir = env.camera_aberta = False
 
             # (h) Relógios e cooldowns (0.25s/tick — o dimensionamento original dos
             # cooldowns, que cobrem as animações de ~0.75-1.0s).

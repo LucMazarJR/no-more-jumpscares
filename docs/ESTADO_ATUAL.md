@@ -181,6 +181,8 @@ Treino do zero com a percepção corrigida, etapas e critérios em
    Andamento (21/out, PC 1): 2× N1 (vitórias) e 1× N2 (vitória com 1,5%). Na N2, 3 das 4
    reaberturas da porta esquerda ficaram gravadas com a flag acesa: o corredor estava vazio, mas o
    detector só limpa a flag com 4 leituras de vazio (`DEBOUNCE_VAZIO`), e cada olhada rende 1–2.
+   Em 06/nov (gravador com bipe, HD e energia corrigida): 1× N1 (vitória, 14%) e 1× N2 (vitória
+   com 0%: 6 reaberturas, nenhuma com a flag acesa; 1 pancada do Foxy, −7 de energia).
    Em 23/out, 1× N3 parcial (393 s). **25/out: o usuário encerrou as gravações**, com ~33 min de
    demos novas (2 N1, 1 N2, 1 N3 parcial), contra as 11–13 noites planejadas.
 2. **BC novo** (`main.py bc`) e avaliação com `jogar --estocastico --trace`: N1 ≥ 40% e reaberturas

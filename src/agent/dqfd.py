@@ -81,6 +81,25 @@ def recompensa_transicao(d0: dict, d1: dict | None, venceu: bool) -> float:
     return r + GAMMA * phi_registro(d1) - phi_registro(d0)
 
 
+def demo_venceu(dados: list[dict]) -> bool:
+    """Chegou ao 6 AM? O relógio da demo parte do F9, então uma vitória pode acabar antes dos 535 s
+    (N2 de 06/11: 521,5 s, e seria rotulada como morte). Com frames HD, vale também a tela de 6 AM
+    nos últimos registros, com o template e o limiar do env. Demos sem HD: só o relógio."""
+    if float(dados[-1]["tempo_ep"]) >= FIM_VITORIA_S:
+        return True
+    if "frame_hd" not in dados[-1]:
+        return False
+    import cv2
+    from src.environment.fnaf_env import FNAFEnv
+    template = FNAFEnv().template_vitoria
+    casou = 0
+    for d in dados[-8:]:
+        img = cv2.imread(d["frame_hd"], cv2.IMREAD_GRAYSCALE)
+        if img is not None:
+            casou += cv2.minMaxLoc(cv2.matchTemplate(img, template, cv2.TM_CCOEFF_NORMED))[1] > 0.70
+    return casou >= 3
+
+
 # ── Transições das demos ─────────────────────────────────────────────────────────────────────
 def carregar_transicoes(caminhos_json: list[str], fase: int = 0) -> list[dict]:
     """Um dict por demo com os tensores das transições no tick do agente (ver docstring do módulo).
@@ -92,7 +111,7 @@ def carregar_transicoes(caminhos_json: list[str], fase: int = 0) -> list[dict]:
         _corrigir_caminhos_frames(dados, caminho)
         _reconstruir_idade_info(dados)
         _neutralizar_reabertura_com_flag(dados)
-        venceu = float(dados[-1]["tempo_ep"]) >= FIM_VITORIA_S
+        venceu = demo_venceu(dados)
         idx = list(range(fase, len(dados), REGISTROS_POR_STEP))
         acoes, recompensas = [], []
         for k, i in enumerate(idx):
