@@ -105,6 +105,19 @@ python scripts/rodar_fase1.py --blocos BC,M1 --trace --ate 08:00
 | Medir estática, piscar e latência de captura | `python -m src.utils.sonda_captura --rotulo <nome> [--segurar-luz esq\|dir] [--frames 600]` |
 | Recalibrar os cliques (mudou tela ou posição da janela) | `python -m src.utils.calibrar_por_passos` |
 
+### Capturas HD das noites do agente
+
+O env grava cada step em 1280×720 enquanto o agente joga (`treino`, `jogar`, `rodar_fase1`).
+Desliga com `FNAF_CAPTURAS=0` no `.env`; a cota é `FNAF_CAPTURAS_COTA_GB` (padrão 10).
+
+| Para quê | Comando |
+|---|---|
+| Ver o que houve de notável nas últimas noites | `python -m src.utils.capturas resumo [--ultimas N]` |
+| Rodar a seleção nas demos HD (valida e semeia o banco de "normal") | `python -m src.utils.capturas reprocessar [dados/gameplay_*]` |
+
+Para olhar rápido: `capturas/notaveis/<noite>/folha.jpg` traz numa imagem só os eventos e os
+quadros "fora do padrão" da noite. Apagar uma pasta de `notaveis/` que não interessa é seguro.
+
 A sonda grava em `debug/sonda_<rotulo>.json` e **sobrescreve** a execução anterior com o mesmo
 rótulo. Use rótulos diferentes se quiser guardar várias.
 

@@ -128,6 +128,10 @@ POS_ALT_ENTER_ESPERA_SEGUNDOS = max(1, _env_int_opcional("FNAF_POS_ALT_ENTER_ESP
 # A noite é rastreada internamente pelo desfecho (sem ler a tela). Falsa vitória/derrota é rara e
 # se reancora sozinha na próxima morte; o 1º reset de cada execução SEMPRE faz New Game (Noite 1).
 RESET_METODO = _env_str_opcional("FNAF_RESET_METODO", "new_game").lower()
+# Capturas HD das noites do agente (src/utils/capturas.py): coisa de máquina (disco), por isso no .env.
+CAPTURAS_ATIVAS = _env_int_opcional("FNAF_CAPTURAS", 1) == 1
+CAPTURAS_COTA_GB = _env_float_opcional("FNAF_CAPTURAS_COTA_GB", 10.0)
+
 MAX_NOITE = 7  # p/ normalizar noite/MAX_NOITE no estado (FNAF1: noites 1-6 + custom)
 # Noite alvo do modo "continue" (1..MAX_NOITE). O modo new_game ignora. Default 1.
 NOITE_DESEJADA = max(1, min(_env_int_opcional("FNAF_NOITE_DESEJADA", 1), MAX_NOITE))
@@ -487,6 +491,14 @@ class FNAFEnv(gym.Env):
         self._resultado_episodio = None   # "vitoria" | "morte" | None (interrompido/truncado)
         self._primeiro_reset = True       # 1º reset da execução ancora o save na Noite 1 (New Game)
         self._acao_reset = "new_game"     # ação ("new_game"|"continue"|"nenhum") decidida por _preparar_reset
+        # Capturas HD: o quadro colorido da observação e a câmera que o jogo MOSTRA (ele lembra a
+        # última escolhida; camera_ativa vira 0 ao fechar). Só rótulo — a observação não muda.
+        self._ultimo_frame_cor = None
+        self._camera_mostrada  = 1
+        self._capturas = None
+        if CAPTURAS_ATIVAS:
+            from src.utils.capturas import GravadorCapturas
+            self._capturas = GravadorCapturas(cota_gb=CAPTURAS_COTA_GB)
 
     def _janela_do_jogo_aberta(self) -> bool:
         import pygetwindow as gw
@@ -747,6 +759,7 @@ class FNAFEnv(gym.Env):
         if not recuperado:
             motivo = f"{motivo} (fallback sem sucesso)"
 
+        self._capturas_chamar("marcar_desfecho", "morte_golden" if como_morte else "interrompido")
         recompensa = RECOMPENSA_MORTE
         if como_morte:
             self._resultado_episodio = "morte"   # mecânica de noite: Continue retoma / New Game volta 1
@@ -799,6 +812,7 @@ class FNAFEnv(gym.Env):
                 "Configure as variaveis obrigatorias antes de executar."
             )
 
+        self._capturas_chamar("encerrar_noite", assincrono=True)
         self._preparar_reset()   # decide self.noite e self._acao_reset pelo desfecho anterior (Decisão 7)
 
         self.passos           = 0
@@ -811,6 +825,8 @@ class FNAFEnv(gym.Env):
         self.porta_dir        = False
         self.camera_aberta    = False
         self.camera_ativa     = 0
+        self._camera_mostrada = 1      # toda noite começa na 1A
+        self._ultimo_frame_cor = None
         self.vivo             = True
         self.lado_atual       = "centro"
         self.ultima_acao      = None
@@ -870,12 +886,14 @@ class FNAFEnv(gym.Env):
         self._t_confirmacao_esq = self.episode_start_time
         self._t_confirmacao_dir = self.episode_start_time
 
+        self._capturas_chamar("iniciar_noite", self._episodio_num, self.noite)
         print("Reset completo — noite iniciada!")
         observacao = self._capturar_observacao_resiliente()
         return observacao, {}
 
     def step(self, acao: int):
         self.passos += 1
+        sync_antes, falha_antes = self._count_sync_camera, self._count_porta_falha
         self._atualizar_tempo()
 
         if not self._verificar_e_focar_janela():
@@ -960,6 +978,8 @@ class FNAFEnv(gym.Env):
 
         luz_esq_step = self.luz_esq
         luz_dir_step = self.luz_dir
+        if self.camera_ativa:
+            self._camera_mostrada = self.camera_ativa
 
         self._atualizar_energia()
         self._atualizar_cooldowns()
@@ -1008,7 +1028,32 @@ class FNAFEnv(gym.Env):
             "causa":          self._classificar_desfecho(morreu, sobreviveu),
         }
 
+        if self._capturas is not None and self._ultimo_frame_cor is not None:
+            self._capturas_chamar("registrar", self._ultimo_frame_cor, {
+                "t": round(self.tempo_jogo, 2), "passo": self.passos, "noite": self.noite,
+                "acao": ACOES[acao], "acao_valida": acao_valida, "energia": round(self.energia, 1),
+                "porta_esq": self.porta_esq, "porta_dir": self.porta_dir,
+                "luz_esq": luz_esq_step, "luz_dir": luz_dir_step,
+                "camera_aberta": self.camera_aberta, "camera_mostrada": self._camera_mostrada,
+                "ameaca_esq": self.ameaca_esq, "ameaca_dir": self.ameaca_dir,
+                "janela_esq": self._janela_esq,
+                "sync_camera": self._count_sync_camera > sync_antes,
+                "porta_falhou": self._count_porta_falha > falha_antes,
+                "morreu": morreu, "vitoria": sobreviveu, "crash_menu": self._crash_menu,
+            })
+            if terminado or truncado:
+                self._capturas_chamar("marcar_desfecho", info["causa"] or "truncado")
+
         return observacao, recompensa, terminado, truncado, info
+
+    def _capturas_chamar(self, metodo: str, *args, **kwargs) -> None:
+        """Capturas nunca derrubam o treino: falha vira aviso."""
+        if getattr(self, "_capturas", None) is None:
+            return
+        try:
+            getattr(self._capturas, metodo)(*args, **kwargs)
+        except Exception as erro:
+            print(f"[capturas] {metodo} falhou: {erro}")
 
     def _classificar_desfecho(self, morreu: bool, sobreviveu: bool) -> str | None:
         """Rotula o desfecho terminal p/ separar SKILL de SORTE na métrica (None se não terminou):
@@ -1312,7 +1357,7 @@ class FNAFEnv(gym.Env):
         # Captura apenas a janela do jogo — mesma região usada na detecção de
         # morte/vitória e na gravação de gameplay (BC). Capturar a tela inteira
         # diluía o jogo em meio ao desktop no frame 84x84.
-        frame_cinza = self._capturar_janela()
+        frame_cinza = self._capturar_janela(guardar_cor=True)
         self._atualizar_ameaca(frame_cinza)
         # Decisão 4B — energia REAL: corrige a energia simulada com a leitura visual do
         # "Power left: XX%" (validar_leitura_energia: salto só vale confirmado). A simulação
@@ -1421,10 +1466,13 @@ class FNAFEnv(gym.Env):
             if g is not None:
                 self.glifos_energia[d] = g
 
-    def _capturar_janela(self) -> np.ndarray:
-        """Captura apenas a janela do jogo e redimensiona para a resolução de referência."""
+    def _capturar_janela(self, guardar_cor: bool = False) -> np.ndarray:
+        """Captura apenas a janela do jogo e redimensiona para a resolução de referência.
+        `guardar_cor`: guarda o BGR em _ultimo_frame_cor (capturas HD; só a da observação)."""
         win = melhor_janela(WINDOW_TITLE)  # mesma seleção do script de captura
         frame = self.capture.capturar_tela(regiao_cliente(win))  # área cliente: sem barra de título
+        if guardar_cor and getattr(self, "_capturas", None) is not None:
+            self._ultimo_frame_cor = frame
 
         cinza = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         return cv2.resize(cinza, self._ref_size)
@@ -1627,4 +1675,4 @@ class FNAFEnv(gym.Env):
         pass
 
     def close(self):
-        pass
+        self._capturas_chamar("encerrar_noite")

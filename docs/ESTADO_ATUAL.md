@@ -286,7 +286,18 @@ Treino do zero com a percepção corrigida, etapas e critérios em
    **geridas**.
 4. **Braço B, DQfD**: implementar e validar offline com as demos novas (tem de igualar o BC) enquanto
    o A roda. Não dá para validar antes de as demos existirem.
-5. Depois: correções ao vivo na N2 (HG-DAgger) e a percepção das câmeras, começando pelo Foxy na
+5. **Capturas HD das noites do agente** (10/nov, `src/utils/capturas.py`): base para a percepção
+   aprendida. O env grava cada step em 1280×720 (thread, sem segurar o step). No fim da noite:
+   - eventos (morte, Golden Freddy, apagão, queda de energia, prancheta abaixada, porta que não
+     respondeu, Bonnie/Chica na porta, vitória; N ≥ 3 inteira) vão para `notaveis/`;
+   - novidade: k-NN em miniaturas contra um banco de quadros normais por contexto (câmera
+     mostrada, luz, escritório). Nas 3 demos HD pegou sozinha o "IT'S ME" na 2A, a Chica na 4B e a
+     câmera 5 diferente, com 6–7 marcações por noite;
+   - até 5 amostras do normal por contexto e noite vão para `amostras/`.
+   As 4 últimas noites ficam inteiras e a cota é de 10 GB. O banco começou com as 3 demos HD
+   (`capturas reprocessar`). O resumo por noite fica em `capturas/resumo.md`, com a folha de
+   contato em `notaveis/<noite>/folha.jpg`.
+6. Depois: correções ao vivo na N2 (HG-DAgger) e a percepção das câmeras, começando pelo Foxy na
    CAM 1C ([ROTEIRO_FOXY_CAM1C.md](ROTEIRO_FOXY_CAM1C.md); adiada porque o Foxy causou 1 de 18 mortes).
 
 O antigo passo "rajada só nos detectores" saiu: o M4 mostrou que o escritório não tem estática.
@@ -303,6 +314,13 @@ Os porquês, o runbook, os riscos e o glossário estão em
   Fase 2 pretende torná-la útil.
 
 ## 6. Hipóteses abertas (não provadas)
+
+- **O agente vê o blip, e não a câmera, logo depois de trocar** (achado em 10/nov, nas demos HD).
+  Toda troca ou abertura de câmera mostra por < 0,25 s faixas de linhas inteiras brancas (≥ 75
+  linhas; um quadro normal tem 0–4, a borda). Nas demos o blip cai ~0,34 s depois do clique, e o
+  env captura a observação `STEP_DELAY = 0.35` s depois da ação. Medir com as capturas do agente
+  (coluna "blip pós-troca" do `capturas/resumo.md`) antes de mexer: esperar o blip passar muda a
+  distribuição da observação, então mexer exige treino do zero.
 
 - ~~**Quem mata na N2.**~~ **Respondido em 7/out** (vídeo de 20 eps de N2 com o RL 190k, `noite alvo 2`):
   **16 de 18 mortes foram do Bonnie**, 1 do Foxy, 1 da Chica. Padrão dominante: o agente **fecha a
@@ -383,8 +401,8 @@ Os porquês, o runbook, os riscos e o glossário estão em
 - **Noites 6/7** têm botões de menu próprios (o Continue não chega nelas). Calibrar quando a N5
   estiver dominada.
 - **`morte_animatronico` é genérico** (não diz quem matou). Hoje só se sabe assistindo o vídeo.
-  Proposta (out/2026): guardar os últimos frames coloridos antes de cada morte (o jumpscare costuma
-  estar neles) e, com eles rotulados, classificar o jumpscare pela cor para virar
+  As capturas (10/nov) já guardam os últimos 20 s coloridos de cada morte em `capturas/notaveis/`.
+  Falta, com eles rotulados, classificar o jumpscare pela cor para virar
   `morte_bonnie`/`morte_chica`/`morte_foxy`/`morte_freddy` no log.
 - **Fixtures de teste faltando no PC pc4:** as imagens `debug/quadro_*.png` (git-ignoradas) não
   estão aqui, então o `testar_deteccao_ameaca` só roda 2 dos 15 casos ("Rosto: 0/0"). Copiar do

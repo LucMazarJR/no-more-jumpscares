@@ -26,7 +26,8 @@ Guia de uso para o dia a dia (o que rodar para cada tarefa e por quê):
 Verificação offline (sem o jogo), todos devem passar: `scripts/smoke_test.py` ·
 `-m src.utils.testar_recompensa` · `-m src.utils.testar_noite` · `-m src.utils.testar_deteccao_ameaca`
 · `-m src.utils.testar_masking` (LSTM) · `-m src.utils.testar_callbacks_treino` (termostato e currículo)
-· `-m src.utils.testar_sync_camera` (câmera abaixada pelo jogo).
+· `-m src.utils.testar_sync_camera` (câmera abaixada pelo jogo) · `-m src.utils.testar_capturas`
+(capturas HD: classe do quadro, eventos, novidade, rotação e cota).
 
 ## Mapa de pastas (⚠ = caminho hardcoded em código, não mover)
 
@@ -43,6 +44,7 @@ docs/                        docs vivos na raiz; retratos de época em docs/hist
 modelos/                     ⚠ checkpoints + vecnormalize pareado + curriculo.json + run.json (git-ignorado)
 logs/                        ⚠ git-ignorado (estrutura abaixo)
 dados/                       ⚠ datasets de gameplay para o BC (git-ignorado)
+capturas/                    imagens HD das noites do agente: recentes/ (4 noites), notaveis/, amostras/, banco/ (git-ignorado)
 debug/                       transiente: fixtures quadro_*.png (usadas por testes) + saídas de ferramentas
 ```
 
