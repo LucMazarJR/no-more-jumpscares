@@ -34,7 +34,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.agent.behavioral_cloning import (
-    NUM_ACOES, _corrigir_caminhos_frames, _estados_do_frame, _imagem_do_frame,
+    NUM_ACOES, _corrigir_caminhos_frames, _cortar_jumpscare, _estados_do_frame, _imagem_do_frame,
     _neutralizar_reabertura_com_flag, _reconstruir_idade_info,
 )
 from src.agent.multimodal_policy import MultimodalExtractor
@@ -109,6 +109,7 @@ def carregar_transicoes(caminhos_json: list[str], fase: int = 0) -> list[dict]:
         with open(caminho, "r") as f:
             dados = json.load(f)
         _corrigir_caminhos_frames(dados, caminho)
+        _cortar_jumpscare(dados)
         _reconstruir_idade_info(dados)
         _neutralizar_reabertura_com_flag(dados)
         venceu = demo_venceu(dados)

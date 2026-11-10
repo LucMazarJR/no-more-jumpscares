@@ -61,6 +61,31 @@ def _corrigir_caminhos_frames(dados: list[dict], caminho_json: str) -> int:
     return faltando
 
 
+def _cortar_jumpscare(dados: list[dict], janela: int = 16, minimo: int = 3) -> int:
+    """Tira do fim da demo o jumpscare e a estática depois dele, que o gravador registra como jogo
+    até o F10. Retorna quantos registros cortou; os segundos ANTES da morte ficam, porque mostram a
+    situação em que se perdeu.
+
+    Sinal: canto do mapa claro (média > 20 no frame 84x84; ~9 no escritório) com o estado dizendo
+    câmera fechada. Fechar a câmera normalmente dá no máximo 2 registros assim (fim da animação);
+    por isso pede `minimo` deles nos últimos `janela` registros (~4 s). Não usa o template de game
+    over: quem aperta F10 rápido nem chega àquela tela (N3 de 09/11)."""
+    cauda = dados[-janela:]
+    claros = []
+    for k, d in enumerate(cauda):
+        if d.get("camera_aberta"):
+            continue
+        frame = cv2.imread(d["frame"], cv2.IMREAD_GRAYSCALE)
+        if frame is not None and frame[50:80, 52:82].mean() > 20:
+            claros.append(k)
+    if len(claros) < minimo:
+        return 0
+    corte = len(dados) - len(cauda) + claros[0]
+    n = len(dados) - corte
+    del dados[corte:]
+    return n
+
+
 def _neutralizar_reabertura_com_flag(dados: list[dict]) -> int:
     """Troca por 'nada' a ação de REABRIR uma porta com a flag de ameaça daquele lado acesa
     (registro com a porta fechada, a flag acesa e a ação de porta do mesmo lado).
@@ -119,6 +144,7 @@ class GameplayDataset(Dataset):
             with open(caminho, "r") as f:
                 dados = json.load(f)
                 _corrigir_caminhos_frames(dados, caminho)
+                _cortar_jumpscare(dados)
                 reconstruidos += _reconstruir_idade_info(dados)   # datasets pré-run-3 (12 estados)
                 neutralizadas += _neutralizar_reabertura_com_flag(dados)
                 self.dados.extend(dados)
@@ -338,6 +364,7 @@ def _carregar_episodios(caminhos_json: list[str]) -> list[dict]:
         with open(caminho, "r") as f:
             dados = json.load(f)
         _corrigir_caminhos_frames(dados, caminho)
+        _cortar_jumpscare(dados)
         _reconstruir_idade_info(dados)   # datasets pré-run-3: reconstrói idade_info_esq/dir
         neutralizadas = _neutralizar_reabertura_com_flag(dados)
         if neutralizadas:
