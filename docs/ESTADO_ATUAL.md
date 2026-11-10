@@ -277,6 +277,13 @@ Treino do zero com a percepção corrigida, etapas e critérios em
    ritmo guloso 0–2,6/min nas demos (humano 0–0,6), bem menos inflado que o BC bruto, mas acima do
    humano; a validação só tem 1 ação de porta (errou, com 7 disparos), e os acertos nas outras demos
    são dentro da amostra de treino. O teste de verdade é no jogo.
+   **Retreino com as 12 demos (10/nov, pc4):** BC calibrado com score 52,9 na validação dele
+   (porta 1,2 → 0,4/min, humano 0,4) e DQfD 3× com 3 seeds: 43,3 / 43,4 / 43,0 (o `DQ` passou a ser
+   `dqfd_pre_12d_s1.pt`; os modelos de 9 demos estão em `modelos/antes_12demos/`). **A comparação
+   offline desta rodada não vale:** o BC separou a N1 `20261021_183718` para validação e o DQfD a
+   `20260702_113131` (as duas regras contam ações de jeitos diferentes), então o "BC 52,0 × DQfD 43" do
+   log mede o BC numa noite que ele viu no treino. O DQfD não piorou com as demos novas (44,1 → 43,4 na
+   mesma noite). Pendência: unificar a escolha da validação entre `behavioral_cloning.py` e `dqfd.py`.
    Próximo: `rodar_fase1.py --blocos DQ,BC --rodadas 4 --trace` no pc4. Critério registrado antes de
    rodar, para construir o treino online: N1 do DQ ≥ a do BC na mesma noite, em vitórias geridas, e
    energia sem dominar as mortes. Atenção: nas demos ele age em ~80% dos steps da N2 (~45/min, humano
